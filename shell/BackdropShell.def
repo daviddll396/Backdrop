@@ -1,0 +1,3 @@
+EXPORTS
+    DllGetClassObject=BackdropDllGetClassObject PRIVATE
+    DllCanUnloadNow=BackdropDllCanUnloadNow PRIVATE

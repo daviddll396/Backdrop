@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+         xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+         xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+         IgnorableNamespaces="uap uap10 rescap com desktop4 desktop5">
+  <Identity Name="Backdrop.ShellPrototype" Publisher="CN=BackdropShellPrototype" Version="1.0.0.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>Backdrop</DisplayName>
+    <PublisherDisplayName>Backdrop Prototype</PublisherDisplayName>
+    <Logo>Assets\Logo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26200.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Applications>
+    <Application Id="Backdrop" Executable="Backdrop.exe"
+                 uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements DisplayName="Backdrop" Description="Create image compositions with Backdrop"
+                           BackgroundColor="transparent" Square150x150Logo="Assets\Logo150.png"
+                           Square44x44Logo="Assets\Logo44.png" />
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="Backdrop Explorer command">
+              <com:Class Id="7a01b163-c207-43ba-97a0-a2f356cbeb44" Path="Backdrop.Shell.dll" ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type=".png"><desktop5:Verb Id="BackdropCreateComposition" Clsid="7a01b163-c207-43ba-97a0-a2f356cbeb44" /></desktop5:ItemType>
+            <desktop5:ItemType Type=".jpg"><desktop5:Verb Id="BackdropCreateComposition" Clsid="7a01b163-c207-43ba-97a0-a2f356cbeb44" /></desktop5:ItemType>
+            <desktop5:ItemType Type=".jpeg"><desktop5:Verb Id="BackdropCreateComposition" Clsid="7a01b163-c207-43ba-97a0-a2f356cbeb44" /></desktop5:ItemType>
+            <desktop5:ItemType Type=".bmp"><desktop5:Verb Id="BackdropCreateComposition" Clsid="7a01b163-c207-43ba-97a0-a2f356cbeb44" /></desktop5:ItemType>
+            <desktop5:ItemType Type=".gif"><desktop5:Verb Id="BackdropCreateComposition" Clsid="7a01b163-c207-43ba-97a0-a2f356cbeb44" /></desktop5:ItemType>
+            <desktop5:ItemType Type=".tif"><desktop5:Verb Id="BackdropCreateComposition" Clsid="7a01b163-c207-43ba-97a0-a2f356cbeb44" /></desktop5:ItemType>
+            <desktop5:ItemType Type=".tiff"><desktop5:Verb Id="BackdropCreateComposition" Clsid="7a01b163-c207-43ba-97a0-a2f356cbeb44" /></desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+</Package>
