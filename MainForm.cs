@@ -34,8 +34,10 @@ internal sealed class MainForm : Form
     private readonly Label _backgroundModeLabel = new() { AutoSize = true, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleLeft };
     private readonly Label _selectedCount = new() { AutoSize = true, ForeColor = MutedColor };
     private readonly Label _status = new() { AutoSize = true, ForeColor = MutedColor, Text = "Add images to begin. Preview updates as you edit." };
-    private readonly Button _moveUp = MakeButton("Move up");
-    private readonly Button _moveDown = MakeButton("Move down");
+    private readonly Button _moveUp = MakeButton("Up");
+    private readonly Button _moveDown = MakeButton("Down");
+    private readonly Button _removeSelectedButton = MakeButton("Remove");
+    private readonly Button _clearImagesButton = MakeButton("Clear");
     private readonly Button _generateButton = MakeButton("Create PNG", primary: true);
     private readonly Button _shortcutButton = MakeButton("Enable right-click shortcut");
     private readonly Button _openImageButton = MakeButton("Open image");
@@ -45,12 +47,14 @@ internal sealed class MainForm : Form
     private readonly SemaphoreSlim _previewGate = new(1, 1);
     private CancellationTokenSource? _previewCancellation;
     private CancellationTokenSource? _runningPreviewCancellation;
+    private CancellationTokenSource? _exportCancellation;
     private string[] _imagePaths = [];
     private string? _generatedOutput;
     private int _previewRequest;
     private bool _isGenerating;
     private bool _isShellMenuChanging;
     private bool _shellMenuScriptsAvailable;
+    private bool _classicShellHelperAvailable;
     private BackgroundMode _backgroundMode;
     private string _backgroundColor1Hex = "#303137";
     private string _backgroundColor2Hex = "#4B4C53";
@@ -127,6 +131,12 @@ internal sealed class MainForm : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (keyData == Keys.Delete && _imageList.ContainsFocus && _imageList.SelectedIndex >= 0)
+        {
+            RemoveSelectedImage();
+            return true;
+        }
+
         if ((keyData & Keys.Modifiers) == Keys.Alt)
         {
             var key = keyData & Keys.KeyCode;
@@ -363,11 +373,23 @@ internal sealed class MainForm : Form
         heading.Controls.Add(_selectedCount, 1, 0);
         content.Controls.Add(heading, 0, 0);
 
+        var listActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = SurfaceColor, Margin = Padding.Empty };
+        listActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 68));
+        listActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32));
+        listActions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var addButton = MakeButton("Add images");
         addButton.Dock = DockStyle.Fill;
+        addButton.Margin = new Padding(0, 0, 4, 0);
         addButton.AccessibleName = "Add up to nine images";
         addButton.Click += (_, _) => ChooseImages();
-        content.Controls.Add(addButton, 0, 1);
+        listActions.Controls.Add(addButton, 0, 0);
+        _clearImagesButton.Dock = DockStyle.Fill;
+        _clearImagesButton.Margin = new Padding(4, 0, 0, 0);
+        _clearImagesButton.AccessibleName = "Clear all images";
+        _clearImagesButton.Click += (_, _) => ClearImages();
+        _settingTooltips.SetToolTip(_clearImagesButton, "Remove all images from the list.");
+        listActions.Controls.Add(_clearImagesButton, 1, 0);
+        content.Controls.Add(listActions, 0, 1);
 
         _imageList.Dock = DockStyle.Fill;
         _imageList.BackColor = FieldColor;
@@ -379,18 +401,29 @@ internal sealed class MainForm : Form
         _imageList.SelectedIndexChanged += (_, _) => UpdateMoveButtons();
         content.Controls.Add(_imageList, 0, 2);
 
-        var moveButtons = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = SurfaceColor };
-        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        var moveButtons = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = SurfaceColor, Margin = Padding.Empty };
+        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.334F));
         moveButtons.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _moveUp.Dock = DockStyle.Fill;
         _moveDown.Dock = DockStyle.Fill;
         _moveUp.Margin = new Padding(0, 3, 4, 0);
         _moveDown.Margin = new Padding(4, 3, 0, 0);
+        _moveUp.AccessibleName = "Move selected image up";
+        _moveDown.AccessibleName = "Move selected image down";
+        _settingTooltips.SetToolTip(_moveUp, "Move the selected image up. Shortcut: Alt + Up.");
+        _settingTooltips.SetToolTip(_moveDown, "Move the selected image down. Shortcut: Alt + Down.");
         _moveUp.Click += (_, _) => MoveSelectedImage(-1);
         _moveDown.Click += (_, _) => MoveSelectedImage(1);
+        _removeSelectedButton.Dock = DockStyle.Fill;
+        _removeSelectedButton.Margin = new Padding(4, 3, 0, 0);
+        _removeSelectedButton.AccessibleName = "Remove selected image";
+        _removeSelectedButton.Click += (_, _) => RemoveSelectedImage();
+        _settingTooltips.SetToolTip(_removeSelectedButton, "Remove the selected image from the list. You can also press Delete.");
         moveButtons.Controls.Add(_moveUp, 0, 0);
         moveButtons.Controls.Add(_moveDown, 1, 0);
+        moveButtons.Controls.Add(_removeSelectedButton, 2, 0);
         content.Controls.Add(moveButtons, 0, 3);
 
         var hint = new Label { Text = "Drop files here · Alt + ↑ / ↓ to reorder", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, AutoSize = true, Font = Font, ForeColor = MutedColor };
@@ -770,29 +803,75 @@ internal sealed class MainForm : Form
         var index = _imageList.SelectedIndex;
         _moveUp.Enabled = index > 0;
         _moveDown.Enabled = index >= 0 && index < _imagePaths.Length - 1;
+        _removeSelectedButton.Enabled = index >= 0 && index < _imagePaths.Length;
+        _clearImagesButton.Enabled = _imagePaths.Length > 0;
     }
 
-    private void UpdateGenerateButton() => _generateButton.Enabled = _imagePaths.Length > 0 && !_isGenerating;
+    private void RemoveSelectedImage()
+    {
+        var index = _imageList.SelectedIndex;
+        if (index < 0 || index >= _imagePaths.Length)
+            return;
+
+        var updated = _imagePaths.ToList();
+        updated.RemoveAt(index);
+        _imagePaths = updated.ToArray();
+        UpdateImageList(_imagePaths.Length == 0 ? -1 : Math.Min(index, _imagePaths.Length - 1));
+        QueuePreview();
+        _status.Text = _imagePaths.Length == 0 ? "Image list cleared." : "Selected image removed.";
+    }
+
+    private void ClearImages()
+    {
+        if (_imagePaths.Length == 0)
+            return;
+
+        _imagePaths = [];
+        UpdateImageList(-1);
+        QueuePreview();
+        _status.Text = "Image list cleared.";
+    }
+
+    private void UpdateGenerateButton()
+    {
+        _generateButton.Text = _isGenerating ? "Cancel" : "Create PNG";
+        _generateButton.AccessibleName = _isGenerating ? "Cancel PNG creation" : "Create PNG composition";
+        _generateButton.Enabled = _isGenerating
+            ? _exportCancellation?.IsCancellationRequested != true
+            : _imagePaths.Length > 0;
+    }
 
     private async Task GenerateImageAsync()
     {
-        if (_isGenerating || _imagePaths.Length == 0)
+        if (_isGenerating)
+        {
+            _exportCancellation?.Cancel();
+            _generateButton.Enabled = false;
+            _status.Text = "Cancelling PNG creation…";
+            return;
+        }
+        if (_imagePaths.Length == 0)
             return;
 
         var paths = _imagePaths.ToArray();
         var settings = CurrentSettings();
+        _exportCancellation = new CancellationTokenSource();
+        var cancellationToken = _exportCancellation.Token;
         _isGenerating = true;
         UpdateGenerateButton();
-        _generateButton.Text = "Creating…";
         _status.Text = "Creating PNG…";
         try
         {
-            var output = await Task.Run(() => BackdropRenderer.Generate(paths, settings));
+            var output = await Task.Run(() => BackdropRenderer.Generate(paths, settings, cancellationToken), cancellationToken);
             _generatedOutput = Path.GetFullPath(output);
             using var image = Image.FromFile(_generatedOutput);
             _status.Text = $"Created {Path.GetFileName(output)} · {image.Width} × {image.Height} px.";
             _outputActions.Visible = true;
             _previewCaption.Text = "Your full-resolution PNG is ready.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _status.Text = "PNG creation cancelled. No new output was created.";
         }
         catch (Exception ex)
         {
@@ -801,7 +880,8 @@ internal sealed class MainForm : Form
         finally
         {
             _isGenerating = false;
-            _generateButton.Text = "Create PNG";
+            _exportCancellation?.Dispose();
+            _exportCancellation = null;
             UpdateGenerateButton();
         }
     }
@@ -832,12 +912,17 @@ internal sealed class MainForm : Form
         try
         {
             var installed = await IsExplorerMenuInstalledAsync();
-            var script = Path.Combine(AppContext.BaseDirectory, "scripts", installed ? "uninstall-shell.ps1" : "install-shell.ps1");
+            var scripts = Path.Combine(AppContext.BaseDirectory, "scripts");
+            var script = _classicShellHelperAvailable
+                ? Path.Combine(scripts, "classic-shell.ps1")
+                : Path.Combine(scripts, installed ? "uninstall-shell.ps1" : "install-shell.ps1");
             if (!File.Exists(script))
                 throw new FileNotFoundException("The Explorer menu script is missing.", script);
 
             _status.Text = installed ? "Removing the Windows 11 menu…" : "Enabling the Windows 11 menu…";
-            var result = await RunPowerShellAsync("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script);
+            var result = _classicShellHelperAvailable
+                ? await RunPowerShellAsync("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Action", installed ? "Unregister" : "Register")
+                : await RunPowerShellAsync("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script);
             if (result.ExitCode != 0)
                 throw new InvalidOperationException(string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error);
 
@@ -859,8 +944,10 @@ internal sealed class MainForm : Form
     private async Task RefreshExplorerMenuStatusAsync()
     {
         var scripts = Path.Combine(AppContext.BaseDirectory, "scripts");
-        _shellMenuScriptsAvailable = File.Exists(Path.Combine(scripts, "install-shell.ps1")) &&
-            File.Exists(Path.Combine(scripts, "uninstall-shell.ps1"));
+        _classicShellHelperAvailable = File.Exists(Path.Combine(scripts, "classic-shell.ps1"));
+        _shellMenuScriptsAvailable = _classicShellHelperAvailable ||
+            (File.Exists(Path.Combine(scripts, "install-shell.ps1")) &&
+             File.Exists(Path.Combine(scripts, "uninstall-shell.ps1")));
         _shortcutButton.Enabled = _shellMenuScriptsAvailable;
         _shortcutButton.Text = "Enable Explorer menu";
         _shortcutButton.AccessibleName = _shortcutButton.Text;
@@ -896,6 +983,15 @@ internal sealed class MainForm : Form
 
     private static async Task<bool> IsExplorerMenuInstalledAsync()
     {
+        var classicShellHelper = Path.Combine(AppContext.BaseDirectory, "scripts", "classic-shell.ps1");
+        if (File.Exists(classicShellHelper))
+        {
+            var classicResult = await RunPowerShellAsync("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", classicShellHelper, "-Action", "Status");
+            if (classicResult.ExitCode != 0)
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(classicResult.Error) ? classicResult.Output : classicResult.Error);
+            return classicResult.Output.Trim().Equals("installed", StringComparison.OrdinalIgnoreCase);
+        }
+
         var command = $"$ErrorActionPreference = 'Stop'; if (Get-AppxPackage -Name '{ShellPackageName}') {{ [Console]::Write('installed') }}";
         var result = await RunPowerShellAsync("-NoProfile", "-NonInteractive", "-Command", command);
         if (result.ExitCode != 0)

@@ -84,10 +84,12 @@ int wmain(int argc, wchar_t** argv)
 {
     try
     {
-        const bool registeredActivation = argc > 1 && std::wstring_view(argv[1]) == L"--registered";
+        const bool packagedActivation = argc > 1 && std::wstring_view(argv[1]) == L"--registered";
+        const bool classicActivation = argc > 1 && std::wstring_view(argv[1]) == L"--classic-registered";
+        const bool registeredActivation = packagedActivation || classicActivation;
         const int firstInput = registeredActivation ? 2 : 1;
         Check(argc >= firstInput + 2 && argc <= firstInput + 9,
-            "Pass two to nine supported image paths (or --registered followed by the paths).");
+            "Pass two to nine supported image paths, --registered followed by the paths, or --classic-registered followed by the paths.");
         const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         Check(SUCCEEDED(apartment), "CoInitializeEx failed.");
 
@@ -117,11 +119,17 @@ int wmain(int argc, wchar_t** argv)
         ComPtr<IClassFactory> factory;
         ComPtr<IExplorerCommand> command;
         HRESULT result = E_FAIL;
-        if (registeredActivation)
+        if (packagedActivation)
         {
             result = CoCreateInstance(CLSID_BackdropCommand, nullptr, CLSCTX_LOCAL_SERVER,
                 __uuidof(IExplorerCommand), reinterpret_cast<void**>(command.GetAddressOf()));
             Check(SUCCEEDED(result), "Packaged CoCreateInstance activation failed.");
+        }
+        else if (classicActivation)
+        {
+            result = CoCreateInstance(CLSID_BackdropCommand, nullptr, CLSCTX_INPROC_SERVER,
+                __uuidof(IExplorerCommand), reinterpret_cast<void**>(command.GetAddressOf()));
+            Check(SUCCEEDED(result), "Classic COM CoCreateInstance activation failed.");
         }
         else
         {

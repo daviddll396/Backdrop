@@ -52,12 +52,15 @@ internal static class BackdropRenderer
         return RenderFiles(paths, previewSettings, cancellationToken);
     }
 
-    public static string Generate(IReadOnlyList<string> paths, AppSettings settings)
+    public static string Generate(IReadOnlyList<string> paths, AppSettings settings, CancellationToken cancellationToken = default)
     {
-        using var image = RenderFiles(paths, settings);
+        using var image = RenderFiles(paths, settings, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         using var encoded = new MemoryStream();
         image.Save(encoded, ImageFormat.Png);
+        cancellationToken.ThrowIfCancellationRequested();
         var bytes = encoded.ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
         var folder = Path.GetDirectoryName(Path.GetFullPath(paths[0]))!;
         var baseName = paths.Count == 1
             ? $"{Path.GetFileNameWithoutExtension(paths[0])}-backdrop"
@@ -65,31 +68,46 @@ internal static class BackdropRenderer
 
         for (var suffix = 1; ; suffix++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = suffix == 1 ? $"{baseName}.png" : $"{baseName}-{suffix}.png";
             var destination = Path.Combine(folder, name);
-            FileStream stream;
-            try
-            {
-                stream = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            }
-            catch (IOException) when (File.Exists(destination))
-            {
+            if (File.Exists(destination))
                 continue;
-            }
-
+            var temporary = Path.Combine(folder, $".backdrop-{Guid.NewGuid():N}.tmp");
+            var temporaryCreated = false;
             try
             {
-                using (stream)
+                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.SequentialScan))
                 {
-                    stream.Write(bytes);
+                    temporaryCreated = true;
+                    var offset = 0;
+                    while (offset < bytes.Length)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var count = Math.Min(64 * 1024, bytes.Length - offset);
+                        stream.Write(bytes, offset, count);
+                        offset += count;
+                    }
+                    cancellationToken.ThrowIfCancellationRequested();
                     stream.Flush(flushToDisk: true);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    File.Move(temporary, destination);
+                }
+                catch (IOException) when (File.Exists(destination))
+                {
+                    continue;
                 }
                 return destination;
             }
-            catch
+            finally
             {
-                try { File.Delete(destination); } catch { }
-                throw;
+                if (temporaryCreated)
+                    try { File.Delete(temporary); } catch { }
             }
         }
     }

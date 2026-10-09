@@ -271,6 +271,18 @@ internal static class SelfCheckRunner
             var mixed = BackdropRenderer.Generate(paths, settings);
             Assert(Path.GetFileName(mixed) == "backdrop-composition-3.png", "Mixed selection produces one collision-safe composition");
             AssertImageSize(mixed, 1920, 1080);
+
+            using (var cancelledExport = new CancellationTokenSource())
+            {
+                cancelledExport.Cancel();
+                var cancelledOutput = Path.Combine(inputFolder, "landscape-backdrop.png");
+                ExpectThrows<OperationCanceledException>(
+                    () => BackdropRenderer.Generate([paths[2]], settings, cancelledExport.Token),
+                    "Canceled export exits before creating a PNG");
+                Assert(!File.Exists(cancelledOutput) && Directory.GetFiles(inputFolder, ".backdrop-*.tmp").Length == 0,
+                    "Canceled export leaves no final or temporary output");
+            }
+
             var gridBounds = BackdropRenderer.GetImageBounds(Enumerable.Repeat(new Size(420, 680), 9).ToArray(), settings);
             Assert(gridBounds.Count == 9, "Automatic grid accepts nine images");
 
@@ -331,7 +343,7 @@ internal static class SelfCheckRunner
                     "Canceled preview exits before loading the image");
             }
 
-            using (var form = new MainForm(settings, previewFile: sampleFile))
+            using (var form = new MainForm(settings, initialPaths: paths[..3], previewFile: sampleFile))
             {
                 form.Opacity = 0;
                 form.ShowInTaskbar = false;
@@ -410,6 +422,19 @@ internal static class SelfCheckRunner
                         "Both gradient color rows and their controls fit inside the editor");
                     backgroundDialog.Close();
                 }
+
+                var imageList = GetField<ListBox>(form, "_imageList");
+                var removeImage = GetField<Button>(form, "_removeSelectedButton");
+                var clearImages = GetField<Button>(form, "_clearImagesButton");
+                var generateButton = GetField<Button>(form, "_generateButton");
+                removeImage.PerformClick();
+                Assert(imageList.Items.Count == 2 && imageList.SelectedIndex == 0 &&
+                    GetField<Label>(form, "_previewImageCount").Text == "2 IMAGES",
+                    "Remove selected updates order, selection, and image count");
+                clearImages.PerformClick();
+                Assert(imageList.Items.Count == 0 && GetField<Label>(form, "_previewImageCount").Text == "SAMPLE" &&
+                    !generateButton.Enabled,
+                    "Clear resets the list and disables PNG creation");
                 form.Close();
             }
 
@@ -417,7 +442,7 @@ internal static class SelfCheckRunner
             var report = string.Join(Environment.NewLine,
             [
                 "Backdrop self-check passed.",
-                "Checked: ratio defaults and presets, source aspect, row/grid order and centering, portrait layout, sample preview dimensions and Auto row, background defaults/modes/colors/pattern determinism, live editor visibility and draft events, collision-safe names, source preservation, image-count limit, enum validation, canceled preview, preference round trip, rounded/dark control chrome, layout selection events, numeric bounds/value events, and 960x720/800x600 captures.",
+                "Checked: ratio defaults and presets, source aspect, row/grid order and centering, portrait layout, sample preview dimensions and Auto row, background defaults/modes/colors/pattern determinism, live editor visibility and draft events, collision-safe names, source preservation, image-count limit, enum validation, canceled preview/export cleanup, remove/clear list actions, preference round trip, rounded/dark control chrome, layout selection events, numeric bounds/value events, and 960x720/800x600 captures.",
                 $"Sample: {sampleFile}",
                 $"Render: {Path.Combine(runFolder, "render-preview.png")}",
                 $"Form: {Path.Combine(runFolder, "form-preview.png")}",
@@ -628,6 +653,14 @@ internal static class SelfCheckRunner
     private static void AssertDarkControlChrome(MainForm form)
     {
         var failures = new List<string>();
+        var moveUp = GetField<Button>(form, "_moveUp");
+        var moveDown = GetField<Button>(form, "_moveDown");
+        Assert(moveUp.Text == "Up" && moveDown.Text == "Down" &&
+            TextRenderer.MeasureText(moveUp.Text, moveUp.Font).Width <= moveUp.ClientSize.Width &&
+            TextRenderer.MeasureText(moveDown.Text, moveDown.Font).Width <= moveDown.ClientSize.Width &&
+            moveUp.AccessibleName == "Move selected image up" && moveDown.AccessibleName == "Move selected image down",
+            "Compact reorder buttons fit while keeping their full accessible names");
+
         var generate = GetField<Control>(form, "_generateButton");
         using (var bitmap = CaptureControl(generate))
         {

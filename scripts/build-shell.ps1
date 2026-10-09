@@ -1,9 +1,21 @@
 [CmdletBinding()]
-param()
+param(
+    [string]$OutputRoot = 'artifacts\v2',
+    [switch]$SkipSparsePackage
+)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$outputRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts\v2'))
+$outputRoot = if ([IO.Path]::IsPathRooted($OutputRoot)) {
+    [IO.Path]::GetFullPath($OutputRoot)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $projectRoot $OutputRoot))
+}
+$artifactsRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'artifacts'))
+$outputRootPrefix = $artifactsRoot.TrimEnd('\') + '\'
+if (-not $outputRoot.StartsWith($outputRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "The native shell build output must stay inside the project artifacts tree: $outputRoot"
+}
 $shellRoot = Join-Path $projectRoot 'shell'
 
 if (-not (Test-Path -LiteralPath $outputRoot -PathType Container) -or
@@ -36,36 +48,42 @@ if (-not $sdk) {
     throw 'The Windows SDK packaging tools were not found. Install the Windows 11 SDK from Visual Studio Installer.'
 }
 
-$assetsRoot = Join-Path $outputRoot 'Assets'
-if (-not (Test-Path -LiteralPath $assetsRoot -PathType Container)) {
-    New-Item -ItemType Directory -Path $assetsRoot | Out-Null
+if (-not (Test-Path -LiteralPath $outputRoot -PathType Container)) {
+    New-Item -ItemType Directory -Path $outputRoot | Out-Null
 }
-Add-Type -AssemblyName System.Drawing
-foreach ($size in @(44, 150)) {
-    $bitmap = [System.Drawing.Bitmap]::new($size, $size)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+
+$assetsRoot = Join-Path $outputRoot 'Assets'
+if (-not $SkipSparsePackage) {
+    if (-not (Test-Path -LiteralPath $assetsRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $assetsRoot | Out-Null
+    }
+    Add-Type -AssemblyName System.Drawing
+    foreach ($size in @(44, 150)) {
+        $bitmap = [System.Drawing.Bitmap]::new($size, $size)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.Clear([System.Drawing.Color]::Transparent)
+            $margin = [int][Math]::Floor($size * 0.1)
+            $graphics.DrawIcon([System.Drawing.SystemIcons]::Application,
+                [System.Drawing.Rectangle]::new($margin, $margin, $size - (2 * $margin), $size - (2 * $margin)))
+            $bitmap.Save((Join-Path $assetsRoot "Logo$size.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+        }
+        finally {
+            $graphics.Dispose()
+            $bitmap.Dispose()
+        }
+    }
+    $logo = [System.Drawing.Bitmap]::new(64, 64)
+    $logoGraphics = [System.Drawing.Graphics]::FromImage($logo)
     try {
-        $graphics.Clear([System.Drawing.Color]::Transparent)
-        $margin = [int][Math]::Floor($size * 0.1)
-        $graphics.DrawIcon([System.Drawing.SystemIcons]::Application,
-            [System.Drawing.Rectangle]::new($margin, $margin, $size - (2 * $margin), $size - (2 * $margin)))
-        $bitmap.Save((Join-Path $assetsRoot "Logo$size.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+        $logoGraphics.Clear([System.Drawing.Color]::Transparent)
+        $logoGraphics.DrawIcon([System.Drawing.SystemIcons]::Application, [System.Drawing.Rectangle]::new(0, 0, 64, 64))
+        $logo.Save((Join-Path $assetsRoot 'Logo.png'), [System.Drawing.Imaging.ImageFormat]::Png)
     }
     finally {
-        $graphics.Dispose()
-        $bitmap.Dispose()
+        $logoGraphics.Dispose()
+        $logo.Dispose()
     }
-}
-$logo = [System.Drawing.Bitmap]::new(64, 64)
-$logoGraphics = [System.Drawing.Graphics]::FromImage($logo)
-try {
-    $logoGraphics.Clear([System.Drawing.Color]::Transparent)
-    $logoGraphics.DrawIcon([System.Drawing.SystemIcons]::Application, [System.Drawing.Rectangle]::new(0, 0, 64, 64))
-    $logo.Save((Join-Path $assetsRoot 'Logo.png'), [System.Drawing.Imaging.ImageFormat]::Png)
-}
-finally {
-    $logoGraphics.Dispose()
-    $logo.Dispose()
 }
 
 $commandFile = Join-Path $outputRoot '.build-shell.cmd'
@@ -74,7 +92,6 @@ $shellObject = Join-Path $outputRoot 'BackdropShell.obj'
 $shellImportLib = Join-Path $outputRoot 'Backdrop.Shell.lib'
 $harnessExe = Join-Path $outputRoot 'BackdropShellHarness.exe'
 $harnessObject = Join-Path $outputRoot 'BackdropShellHarness.obj'
-$outputScripts = Join-Path $outputRoot 'scripts'
 $manifest = Join-Path $shellRoot 'AppxManifest.xml'
 $definition = Join-Path $shellRoot 'BackdropShell.def'
 $lines = @(
@@ -105,30 +122,37 @@ finally {
     }
 }
 
-Copy-Item -LiteralPath $manifest -Destination (Join-Path $outputRoot 'AppxManifest.xml') -Force
-$stageRoot = Join-Path $outputRoot ('.sparse-package-stage-' + [Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $stageRoot | Out-Null
-try {
-    Copy-Item -LiteralPath (Join-Path $outputRoot 'AppxManifest.xml') -Destination $stageRoot
-    Copy-Item -LiteralPath $assetsRoot -Destination $stageRoot -Recurse
-    & (Join-Path $sdk 'makeappx.exe') pack /d $stageRoot /p (Join-Path $outputRoot 'Backdrop.ShellPrototype.msix') /nv /o
-    if ($LASTEXITCODE -ne 0) {
-        throw "MakeAppx failed to create the sparse package (exit code $LASTEXITCODE)."
+if (-not $SkipSparsePackage) {
+    Copy-Item -LiteralPath $manifest -Destination (Join-Path $outputRoot 'AppxManifest.xml') -Force
+    $stageRoot = Join-Path $outputRoot ('.sparse-package-stage-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $stageRoot | Out-Null
+    try {
+        Copy-Item -LiteralPath (Join-Path $outputRoot 'AppxManifest.xml') -Destination $stageRoot
+        Copy-Item -LiteralPath $assetsRoot -Destination $stageRoot -Recurse
+        & (Join-Path $sdk 'makeappx.exe') pack /d $stageRoot /p (Join-Path $outputRoot 'Backdrop.ShellPrototype.msix') /nv /o
+        if ($LASTEXITCODE -ne 0) {
+            throw "MakeAppx failed to create the sparse package (exit code $LASTEXITCODE)."
+        }
     }
-}
-finally {
-    $fullStageRoot = [IO.Path]::GetFullPath($stageRoot)
-    $expectedStageRoot = [IO.Path]::GetFullPath((Join-Path $outputRoot ([IO.Path]::GetFileName($stageRoot))))
-    if ($fullStageRoot.StartsWith($outputRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -and
-        $fullStageRoot -eq $expectedStageRoot -and (Test-Path -LiteralPath $expectedStageRoot -PathType Container)) {
-        Remove-Item -LiteralPath $expectedStageRoot -Recurse -Force
+    finally {
+        $fullStageRoot = [IO.Path]::GetFullPath($stageRoot)
+        $expectedStageRoot = [IO.Path]::GetFullPath((Join-Path $outputRoot ([IO.Path]::GetFileName($stageRoot))))
+        if ($fullStageRoot.StartsWith($outputRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -and
+            $fullStageRoot -eq $expectedStageRoot -and (Test-Path -LiteralPath $expectedStageRoot -PathType Container)) {
+            Remove-Item -LiteralPath $expectedStageRoot -Recurse -Force
+        }
     }
+
+    $outputScripts = Join-Path $outputRoot 'scripts'
+    if (-not (Test-Path -LiteralPath $outputScripts -PathType Container)) {
+        New-Item -ItemType Directory -Path $outputScripts | Out-Null
+    }
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-shell.ps1') -Destination $outputScripts -Force
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall-shell.ps1') -Destination $outputScripts -Force
 }
 
-if (-not (Test-Path -LiteralPath $outputScripts -PathType Container)) {
-    New-Item -ItemType Directory -Path $outputScripts | Out-Null
+if ($SkipSparsePackage) {
+    Write-Output "Built Backdrop.Shell.dll and harness in $outputRoot (sparse package skipped)."
+} else {
+    Write-Output "Built Backdrop.Shell.dll and sparse package in $outputRoot"
 }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-shell.ps1') -Destination $outputScripts -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall-shell.ps1') -Destination $outputScripts -Force
-
-Write-Output "Built Backdrop.Shell.dll and sparse package in $outputRoot"

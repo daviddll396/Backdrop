@@ -1,6 +1,8 @@
 # Backdrop
 
-Backdrop combines up to nine pictures into one PNG. The window shows a live preview. Add files with **Add images** or drop them into the window. Use **Move up** and **Move down**, or press **Alt+Up** and **Alt+Down**, to set their order. Pictures keep their original shape and are never cropped.
+Backdrop combines up to nine pictures into one PNG. The window shows a live preview. Add files with **Add images** or drop them into the window. Use **Up** and **Down**, or press **Alt+Up** and **Alt+Down**, to set their order. Pictures keep their original shape and are never cropped.
+
+Image processing runs on your device. Backdrop does not upload pictures or require an account.
 
 ## Composition
 
@@ -20,7 +22,7 @@ Backdrop preserves the source files and never replaces an output. A single pictu
 
 ## Run
 
-Use the .NET 9 SDK on Windows:
+Use the .NET 10 SDK on Windows:
 
 ```powershell
 dotnet run --project Backdrop.csproj
@@ -43,9 +45,25 @@ Backdrop.exe --generate "C:\Photos\one.jpg" "C:\Photos\two.jpg"
 
 The command prints the output path when it has a console. When Explorer starts it, a small window appears for up to eight seconds. It does not take focus. Choose **Open image** or **Show folder** to open the result.
 
-The **Enable Explorer menu** button registers the packaged Explorer command for the current user. The menu command is **Create composition with Backdrop** and sends the whole selection to one composition. Registration needs loose package registration enabled in Windows. The script checks this setting and does not change it. Use **Remove Explorer menu** to unregister it.
+## Windows installer candidate
 
-The current package is a development prototype. It is not signed for Store distribution. A release package needs a publisher identity that matches its signing certificate and must pass the Store or trusted-certificate signing process. The built-in self-check does not invoke Explorer or confirm that Windows displays the menu; test registration and the menu on the target Windows 11 machine.
+The first release target is a downloadable installer for Windows 11 on x64 hardware. The installer includes the .NET runtime. Users do not need the SDK, administrator access, Developer Mode, or a test certificate. It installs for the current user in `%LOCALAPPDATA%\Programs\Backdrop`.
+
+The installer registers **Create composition with Backdrop** for Explorer's **Show more options** menu. Actual menu visibility still needs the manual Explorer check. The command sends the selected pictures to one composition. Use **Remove Explorer menu** in the app to disable it, or **Enable Explorer menu** to enable it again. The consumer installer uses a classic shell command. The older sparse package scripts are for development only.
+
+The installer candidate is unsigned. Windows can show a SmartScreen warning. A public binary release is pending the clean-machine and real Explorer checks in [the release checklist](docs/release-checklist.md). Microsoft Store packaging is the next release target.
+
+### Build the installer
+
+The build requires .NET SDK **10.0.401**, Inno Setup **6.7.3**, and the Visual Studio C++ build tools with a Windows SDK. Put the portable .NET SDK in `artifacts/tools/dotnet`. Put the Inno Setup compiler in `artifacts/tools/InnoSetupPortable/tools/ISCC.exe`. Use the official [Microsoft SDK download](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) and the pinned [Inno Setup tools package](https://www.nuget.org/packages/Tools.InnoSetup/6.7.3). The build checks the compiler's signature.
+
+```powershell
+.\scripts\build-release.ps1 -Version 0.1.0
+```
+
+The script publishes a self-contained app, builds the native shell command, runs the staged app checks and native harness, then builds the installer. The installer and SHA-256 file go in `artifacts/release-output`. Generated files are not committed.
+
+Use **Remove**, **Clear**, or **Delete** while the image list has focus to remove pictures from the composition. These actions do not delete source files. During an export, **Create PNG** changes to **Cancel**. Cancellation is checked between processing steps. It does not interrupt an active image decode or encode. A completed export remains valid if cancellation arrives after the file was committed.
 
 ## Inputs and checks
 
