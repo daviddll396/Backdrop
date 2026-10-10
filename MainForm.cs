@@ -18,11 +18,11 @@ internal sealed class MainForm : Form
     private static readonly Color AccentColor = BackdropPalette.Accent;
     private static readonly Color AccentTextColor = BackdropPalette.AccentText;
 
-    private readonly DarkNumericUpDown _padding = new() { Minimum = 0, Maximum = 25, Increment = 1 };
-    private readonly DarkNumericUpDown _shadow = new() { Minimum = 0, Maximum = 40, Increment = 2 };
-    private readonly DarkNumericUpDown _outputWidth = new() { Minimum = 640, Maximum = 4096, Increment = 160, ThousandsSeparator = true };
+    private readonly BackdropNumberSelector _padding = new() { Minimum = 0, Maximum = 25, Increment = 1 };
+    private readonly BackdropNumberSelector _shadow = new() { Minimum = 0, Maximum = 40, Increment = 2 };
+    private readonly BackdropNumberSelector _outputWidth = new() { Minimum = 640, Maximum = 4096, Increment = 160, ThousandsSeparator = true };
     private readonly ToolTip _settingTooltips = new();
-    private readonly DarkComboBox _ratio = new();
+    private readonly BackdropDropdown _ratio = new();
     private readonly SegmentedChoiceControl _layout = new("Auto", "Row", "Grid");
     private readonly ListBox _imageList = new() { IntegralHeight = false, SelectionMode = SelectionMode.One, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 26, Margin = Padding.Empty };
     private readonly PictureBox _preview = new() { SizeMode = PictureBoxSizeMode.Zoom, BackColor = PreviewColor, Visible = false };
@@ -73,6 +73,7 @@ internal sealed class MainForm : Form
     private string _backgroundColor1Hex = "#303137";
     private string _backgroundColor2Hex = "#4B4C53";
     private BackgroundPattern _backgroundPattern;
+    private int _autoGradientLightenPercent = 20;
 
     public MainForm(AppSettings settings, IReadOnlyList<string>? initialPaths = null, string? previewFile = null)
     {
@@ -96,6 +97,7 @@ internal sealed class MainForm : Form
         _backgroundColor1Hex = initialSettings.BackgroundColor1Hex;
         _backgroundColor2Hex = initialSettings.BackgroundColor2Hex;
         _backgroundPattern = initialSettings.BackgroundPattern;
+        _autoGradientLightenPercent = initialSettings.AutoGradientLightenPercent;
         _ratio.Items.AddRange(["Auto", "Wide 16:9", "Square 1:1", "Portrait 4:5"]);
         _ratio.SelectedIndex = initialSettings.CanvasRatio switch
         {
@@ -212,8 +214,8 @@ internal sealed class MainForm : Form
 
         root.Controls.Add(BuildHeader(), 0, 0);
         var workspace = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = WindowColor, Margin = new Padding(0, 10, 0, 10) };
-        workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 67));
-        workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+        workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
+        workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
         workspace.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         workspace.Controls.Add(BuildPreviewCard(), 0, 0);
         workspace.Controls.Add(BuildSidebar(), 1, 0);
@@ -318,10 +320,13 @@ internal sealed class MainForm : Form
 
     private Control BuildSidebar()
     {
-        var sidebar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = WindowColor };
-        sidebar.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
-        sidebar.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
-        sidebar.Controls.Add(BuildSettingsCard(), 0, 0);
+        var sidebar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = WindowColor, Margin = Padding.Empty };
+        sidebar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        sidebar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var settingsCard = BuildSettingsCard();
+        settingsCard.Dock = DockStyle.Top;
+        settingsCard.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        sidebar.Controls.Add(settingsCard, 0, 0);
         var images = BuildImagesCard();
         images.Margin = new Padding(0, 12, 0, 0);
         sidebar.Controls.Add(images, 0, 1);
@@ -330,21 +335,19 @@ internal sealed class MainForm : Form
 
     private Control BuildSettingsCard()
     {
-        var card = new Panel { Dock = DockStyle.Fill, BackColor = SurfaceColor, Padding = Padding.Empty };
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1, BackColor = SurfaceColor, Padding = new Padding(10) };
+        var card = new Panel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = SurfaceColor, Padding = Padding.Empty, Margin = Padding.Empty };
+        var content = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 1, BackColor = SurfaceColor, Padding = new Padding(10), Margin = Padding.Empty };
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, BackColor = SurfaceColor, Margin = Padding.Empty };
+        var fields = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 3, BackColor = SurfaceColor, Margin = Padding.Empty };
         fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        for (var row = 0; row < 4; row++)
-            fields.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        for (var row = 0; row < 3; row++)
+            fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var ratioField = MakeSettingField("Canvas ratio", _ratio);
         fields.Controls.Add(ratioField, 0, 0);
-        fields.SetColumnSpan(ratioField, 2);
         var layoutField = MakeSettingField("Layout", _layout);
-        fields.Controls.Add(layoutField, 0, 1);
-        fields.SetColumnSpan(layoutField, 2);
-        _ratio.DrawItem += DrawComboItem;
+        fields.Controls.Add(layoutField, 1, 0);
         _outputWidth.AccessibleName = "Canvas long edge in pixels";
         _outputWidth.AccessibleDescription = "Output canvas long edge in pixels, from 640 to 4096.";
         _padding.AccessibleName = "Padding percentage";
@@ -355,10 +358,10 @@ internal sealed class MainForm : Form
         _settingTooltips.SetToolTip(_padding, "Padding around each picture, as a percent of the canvas.");
         _settingTooltips.SetToolTip(_shadow, "Shadow strength, as a percent.");
         var sizeField = MakeSettingField("Size (px)", _outputWidth);
-        fields.Controls.Add(sizeField, 0, 2);
+        fields.Controls.Add(sizeField, 0, 1);
         fields.SetColumnSpan(sizeField, 2);
-        fields.Controls.Add(MakeSettingField("Padding (%)", _padding), 0, 3);
-        fields.Controls.Add(MakeSettingField("Shadow (%)", _shadow), 1, 3);
+        fields.Controls.Add(MakeSettingField("Padding (%)", _padding), 0, 2);
+        fields.Controls.Add(MakeSettingField("Shadow (%)", _shadow), 1, 2);
         content.Controls.Add(fields, 0, 0);
         card.Controls.Add(content);
         return card;
@@ -385,13 +388,13 @@ internal sealed class MainForm : Form
         heading.Controls.Add(_selectedCount, 0, 0);
         var addButton = MakeButton("Add images");
         addButton.Dock = DockStyle.Fill;
-        addButton.Margin = Padding.Empty;
+        addButton.Margin = new Padding(4, 0, 4, 0);
         addButton.AccessibleName = "Add up to nine images";
         addButton.Click += (_, _) => ChooseImages();
         _settingTooltips.SetToolTip(addButton, "Add images to the composition.");
         heading.Controls.Add(addButton, 1, 0);
         _clearImagesButton.Dock = DockStyle.Fill;
-        _clearImagesButton.Margin = Padding.Empty;
+        _clearImagesButton.Margin = new Padding(4, 0, 4, 0);
         _clearImagesButton.AccessibleName = "Clear all images";
         _clearImagesButton.Click += (_, _) => ClearImages();
         _settingTooltips.SetToolTip(_clearImagesButton, "Remove all images from the list.");
@@ -418,7 +421,7 @@ internal sealed class MainForm : Form
         _moveUp.Dock = DockStyle.Fill;
         _moveDown.Dock = DockStyle.Fill;
         _moveUp.Margin = new Padding(0, 3, 4, 0);
-        _moveDown.Margin = new Padding(4, 3, 0, 0);
+        _moveDown.Margin = new Padding(4, 3, 4, 0);
         _moveUp.AccessibleName = "Move selected image to previous position";
         _moveUp.AccessibleDescription = "Move the selected image one place earlier in the composition.";
         _moveDown.AccessibleName = "Move selected image to next position";
@@ -428,7 +431,7 @@ internal sealed class MainForm : Form
         _moveUp.Click += (_, _) => MoveSelectedImage(-1);
         _moveDown.Click += (_, _) => MoveSelectedImage(1);
         _removeSelectedButton.Dock = DockStyle.Fill;
-        _removeSelectedButton.Margin = new Padding(4, 3, 0, 0);
+        _removeSelectedButton.Margin = new Padding(4, 3, 4, 0);
         _removeSelectedButton.AccessibleName = "Remove selected image";
         _removeSelectedButton.Click += (_, _) => RemoveSelectedImage();
         _settingTooltips.SetToolTip(_removeSelectedButton, "Remove the selected image from the list. You can also press Delete.");
@@ -501,56 +504,29 @@ internal sealed class MainForm : Form
 
     private static Control MakeSettingField(string labelText, Control input)
     {
-        var field = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = SurfaceColor, Margin = new Padding(3, 0, 3, 0) };
+        var field = new TableLayoutPanel { Dock = DockStyle.Top, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 2, BackColor = SurfaceColor, Margin = new Padding(3, 0, 3, 0) };
         field.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         field.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        field.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        field.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         field.Controls.Add(new Label { Text = labelText, Dock = DockStyle.Fill, ForeColor = MutedColor, AutoSize = true, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 0, 0, 2), AccessibleName = labelText }, 0, 0);
         input.Dock = DockStyle.Fill;
         input.Margin = Padding.Empty;
+        input.MinimumSize = new Size(0, 38);
+        input.Height = 38;
         input.ForeColor = TextColor;
         input.BackColor = FieldColor;
         if (string.IsNullOrWhiteSpace(input.AccessibleName))
             input.AccessibleName = labelText;
-        if (input is ComboBox combo)
-            combo.FlatStyle = FlatStyle.Flat;
-        if (input is DarkNumericUpDown number)
+        if (input is BackdropNumberSelector number)
         {
-            number.AutoSize = false;
-            number.BorderStyle = BorderStyle.None;
             number.Font = new Font("Segoe UI", 10F);
-            number.MinimumSize = new Size(0, 28);
+            number.RefreshAccessibility();
         }
         field.Controls.Add(input, 0, 1);
         return field;
     }
 
     private static BackdropButton MakeButton(string text, bool primary = false) => new(text, primary);
-
-    private void DrawComboItem(object? sender, DrawItemEventArgs e)
-    {
-        if (sender is not ComboBox combo || e.Index < 0)
-            return;
-        var selected = (e.State & DrawItemState.Selected) != 0;
-        using var brush = new SolidBrush(selected ? Color.FromArgb(68, 70, 77) : FieldColor);
-        e.Graphics.FillRectangle(brush, e.Bounds);
-        var textBounds = Rectangle.Inflate(e.Bounds, -26, 0);
-        TextRenderer.DrawText(e.Graphics, combo.GetItemText(combo.Items[e.Index]), combo.Font, textBounds, TextColor,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        if (combo.SelectedIndex == e.Index)
-        {
-            var x = e.Bounds.Left + 12;
-            var y = e.Bounds.Top + e.Bounds.Height / 2;
-            using var check = new Pen(TextColor, 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            e.Graphics.DrawLine(check, x, y, x + 3, y + 3);
-            e.Graphics.DrawLine(check, x + 3, y + 3, x + 8, y - 4);
-        }
-        if ((e.State & DrawItemState.Focus) != 0)
-        {
-            using var focus = new Pen(BackdropPalette.Focus);
-            e.Graphics.DrawRectangle(focus, e.Bounds.Left, e.Bounds.Top, e.Bounds.Width - 1, e.Bounds.Height - 1);
-        }
-    }
 
     private void DrawImageListItem(object? sender, DrawItemEventArgs e)
     {
@@ -704,7 +680,8 @@ internal sealed class MainForm : Form
         BackgroundMode = _backgroundMode,
         BackgroundColor1Hex = _backgroundColor1Hex,
         BackgroundColor2Hex = _backgroundColor2Hex,
-        BackgroundPattern = _backgroundPattern
+        BackgroundPattern = _backgroundPattern,
+        AutoGradientLightenPercent = _autoGradientLightenPercent
     };
 
     private static Icon LoadWindowIcon()
@@ -738,6 +715,7 @@ internal sealed class MainForm : Form
         var previousColor1 = _backgroundColor1Hex;
         var previousColor2 = _backgroundColor2Hex;
         var previousPattern = _backgroundPattern;
+        var previousLightenPercent = _autoGradientLightenPercent;
         using var dialog = new BackgroundSettingsDialog(CurrentSettings());
         dialog.DraftChanged += (_, _) => ApplyBackgroundDraft(dialog);
         if (dialog.ShowDialog(this) == DialogResult.OK)
@@ -751,6 +729,7 @@ internal sealed class MainForm : Form
         _backgroundColor1Hex = previousColor1;
         _backgroundColor2Hex = previousColor2;
         _backgroundPattern = previousPattern;
+        _autoGradientLightenPercent = previousLightenPercent;
         UpdateBackgroundModeLabel();
         QueuePreview();
     }
@@ -761,6 +740,7 @@ internal sealed class MainForm : Form
         _backgroundColor1Hex = dialog.Color1Hex;
         _backgroundColor2Hex = dialog.Color2Hex;
         _backgroundPattern = dialog.SelectedPattern;
+        _autoGradientLightenPercent = dialog.AutoGradientLightenPercent;
         UpdateBackgroundModeLabel();
         QueuePreview();
     }

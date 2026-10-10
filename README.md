@@ -12,11 +12,13 @@ Image processing runs on your device. Backdrop does not upload pictures or requi
 - **Long edge:** The output's longest side, from 640 to 4096 pixels. The 16:9 default at 1920 pixels makes a 1920 × 1080 PNG.
 - **Padding:** A percentage applied to each canvas edge.
 - **Shadow:** A soft Gaussian shadow under each picture.
-- **Background:** Choose **Automatic gradient**, **Solid color**, **Two-color gradient**, or **Pattern**. Automatic gradient samples the selected pictures. It keeps gray colors for monochrome pictures and makes dark colors lighter. This mode is the default for older preference files. Pattern uses one base color with soft grain or spaced dots.
+- **Background:** Choose **Automatic gradient**, **Solid color**, **Two-color gradient**, or **Pattern**. Automatic gradient samples every selected picture on an equal 24 × 24 grid. It keeps gray colors for monochrome pictures. Set **Lighten colors (%)** from 0 for the sampled colors to 100 for white. The default is 20. This setting only affects Automatic gradient. Pattern uses one base color with soft grain or spaced dots.
 
 The live preview uses a 1000-pixel long edge. Backdrop checks the full source size and orientation before it reduces a picture. It reuses the reduced picture while the source stays unchanged. The final PNG uses the selected long edge. A small spinner shows while the preview updates after a short pause. **Save preferences** stores settings in `%LOCALAPPDATA%\Backdrop\settings.json`; changes are not saved automatically.
 
-Choose **Background** above the preview to edit the background. Use a quick color swatch, enter an opaque `#RRGGBB` value, or open the advanced color picker. Invalid visible color text keeps the editor open until you correct it. Background changes update the preview. **Apply** keeps them in the current session; choose **Save preferences** in the main window to keep them for later.
+Choose **Background** above the preview to edit the background. Use a quick color swatch, enter an opaque `#RRGGBB` value, or open the custom advanced color picker. Invalid visible color text keeps the editor open until you correct it. Background changes update the preview. **Apply** keeps them in the current session; choose **Save preferences** in the main window to keep them for later.
+
+The advanced picker has hue and saturation/brightness controls. It shows the current and new colors. Canvas size, padding, shadow, and lightening use horizontal number selectors. Click a left or right chevron, or type a whole number in the center.
 
 Backdrop preserves the source files and never replaces an output. A single picture is named `<image>-backdrop.png`. A group is named `backdrop-composition.png`. If that name exists, Backdrop adds a number.
 
@@ -67,7 +69,7 @@ Use **Remove**, **Clear**, or **Delete** while the image list has focus to remov
 
 ## Inputs and checks
 
-Supported formats are PNG, JPEG, BMP, GIF, and TIFF. Each picture can be at most 40 megapixels. A selection can be at most 80 megapixels total.
+Supported formats are PNG, JPEG, BMP, GIF, and TIFF. Each picture can be at most 40 megapixels. A selection can be at most 80 megapixels total. At 32 bits per pixel, 80 megapixels use about 320 MB for one pixel buffer, before decoder and output working data.
 
 Run the built-in checks and create wide and compact form captures:
 

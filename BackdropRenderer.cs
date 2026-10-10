@@ -140,6 +140,8 @@ internal static class BackdropRenderer
         public long Blue;
     }
 
+    private readonly record struct ColorSample(int Key, Color Color, long Count);
+
     public static Bitmap RenderFiles(IReadOnlyList<string> paths, AppSettings settings, CancellationToken cancellationToken = default)
     {
         ValidateRequest(paths, settings);
@@ -510,7 +512,14 @@ internal static class BackdropRenderer
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 DrawShadow(graphics, bounds[i], settings.ShadowStrength, output.Width, shadowMaskLongEdge);
-                graphics.DrawImage(images[i], bounds[i]);
+                var radius = Math.Min(2f * Math.Max(canvas.Width, canvas.Height) / 1920f,
+                    Math.Min(bounds[i].Width, bounds[i].Height) / 2);
+                using var path = BackdropControlPaint.RoundedRectangle(bounds[i], radius);
+                using var brush = new TextureBrush(images[i], WrapMode.Clamp);
+                using var transform = new Matrix(bounds[i].Width / images[i].Width, 0, 0,
+                    bounds[i].Height / images[i].Height, bounds[i].X, bounds[i].Y);
+                brush.Transform = transform;
+                graphics.FillPath(brush, path);
             }
             return output;
         }
@@ -528,7 +537,7 @@ internal static class BackdropRenderer
         switch (settings.BackgroundMode)
         {
             case BackgroundMode.AutoGradient:
-                var sampled = SampleDominantColors(images);
+                var sampled = SampleDominantColors(images, settings.AutoGradientLightenPercent);
                 FillGradient(canvas, sampled.First, sampled.Second, cancellationToken);
                 break;
             case BackgroundMode.SolidColor:
@@ -699,7 +708,7 @@ internal static class BackdropRenderer
         return tile;
     }
 
-    private static (Color First, Color Second) SampleDominantColors(IReadOnlyList<Bitmap> images)
+    private static (Color First, Color Second) SampleDominantColors(IReadOnlyList<Bitmap> images, int lightenPercent)
     {
         var buckets = new Dictionary<int, ColorBucket>();
         foreach (var image in images)
@@ -724,28 +733,64 @@ internal static class BackdropRenderer
             }
         }
 
-        var dominant = buckets.OrderByDescending(pair => pair.Value.Count)
-            .Select(pair => (Color: Average(pair.Value), pair.Value.Count))
+        var dominant = buckets.OrderBy(pair => pair.Key)
+            .Select(pair => new ColorSample(pair.Key, Average(pair.Value), pair.Value.Count))
             .ToArray();
         if (dominant.Length == 0)
-            return (Color.FromArgb(91, 104, 122), Color.FromArgb(145, 153, 166));
+            return (LightenAutomaticColor(Color.FromArgb(91, 104, 122), lightenPercent),
+                LightenAutomaticColor(Color.FromArgb(145, 153, 166), lightenPercent));
 
         var colored = dominant.Where(item => item.Color.GetSaturation() >= 0.2f && item.Color.GetBrightness() >= 0.08f).ToArray();
-        var candidates = colored.Length > 0 && colored[0].Count >= dominant.Sum(item => item.Count) * 0.05
+        var mostSupportedColor = colored.OrderByDescending(item => item.Count).ThenBy(item => item.Key).FirstOrDefault();
+        var candidates = colored.Length > 0 && mostSupportedColor.Count >= dominant.Sum(item => item.Count) * 0.05
             ? colored
             : dominant;
-        var first = LiftAutomaticColor(candidates[0].Color);
-        var secondBucket = candidates.Skip(1).Select(item => LiftAutomaticColor(item.Color))
-            .FirstOrDefault(color => ColorDistance(first, color) >= 50);
-        if (secondBucket.IsEmpty)
-            secondBucket = first.GetBrightness() < 0.7f
+        var firstSeed = candidates.OrderByDescending(item => item.Count).ThenBy(item => item.Key).First();
+        var secondSeed = candidates.Where(item => item.Key != firstSeed.Key)
+            .OrderByDescending(item => item.Count * ColorDistanceSquared(firstSeed.Color, item.Color))
+            .ThenBy(item => item.Key)
+            .FirstOrDefault();
+        var refined = secondSeed.Count == 0
+            ? (firstSeed.Color, Color.Empty)
+            : RefineColorClusters(candidates, firstSeed.Color, secondSeed.Color);
+        var first = refined.Item1;
+        var second = refined.Item2;
+        if (second.IsEmpty || ColorDistance(first, second) < 50)
+            second = first.GetBrightness() < 0.7f
                 ? Blend(first, Color.White, 0.32f)
                 : Blend(first, Color.Black, 0.25f);
-        return (first, secondBucket);
+        return (LightenAutomaticColor(first, lightenPercent), LightenAutomaticColor(second, lightenPercent));
     }
 
-    private static Color LiftAutomaticColor(Color color) =>
-        Blend(color, Color.White, 0.25f + 0.30f * (1f - color.GetBrightness()));
+    private static (Color First, Color Second) RefineColorClusters(ColorSample[] samples, Color first, Color second)
+    {
+        for (var iteration = 0; iteration < 6; iteration++)
+        {
+            var firstCluster = new ColorBucket();
+            var secondCluster = new ColorBucket();
+            foreach (var sample in samples)
+            {
+                var cluster = ColorDistanceSquared(sample.Color, first) <= ColorDistanceSquared(sample.Color, second)
+                    ? firstCluster
+                    : secondCluster;
+                cluster.Count += sample.Count;
+                cluster.Red += sample.Count * sample.Color.R;
+                cluster.Green += sample.Count * sample.Color.G;
+                cluster.Blue += sample.Count * sample.Color.B;
+            }
+
+            var nextFirst = firstCluster.Count == 0 ? first : Average(firstCluster);
+            var nextSecond = secondCluster.Count == 0 ? second : Average(secondCluster);
+            if (nextFirst.ToArgb() == first.ToArgb() && nextSecond.ToArgb() == second.ToArgb())
+                break;
+            first = nextFirst;
+            second = nextSecond;
+        }
+        return (first, second);
+    }
+
+    private static Color LightenAutomaticColor(Color color, int percent) =>
+        Blend(color, Color.White, percent / 100f);
 
     private static Color Average(ColorBucket bucket) => Color.FromArgb(
         (int)(bucket.Red / bucket.Count),
@@ -754,10 +799,15 @@ internal static class BackdropRenderer
 
     private static double ColorDistance(Color first, Color second)
     {
+        return Math.Sqrt(ColorDistanceSquared(first, second));
+    }
+
+    private static double ColorDistanceSquared(Color first, Color second)
+    {
         var red = first.R - second.R;
         var green = first.G - second.G;
         var blue = first.B - second.B;
-        return Math.Sqrt(red * red + green * green + blue * blue);
+        return red * red + green * green + blue * blue;
     }
 
     private static void DrawShadow(Graphics graphics, RectangleF bounds, double strength, int canvasWidth, int shadowMaskLongEdge)
@@ -766,7 +816,7 @@ internal static class BackdropRenderer
             return;
 
         var blur = Math.Clamp(canvasWidth * 0.012f, 8, 32);
-        var offset = blur * 0.2f;
+        var offset = 0f;
         var padding = (int)Math.Ceiling(blur + offset);
         var scale = Math.Min(1f, shadowMaskLongEdge / Math.Max(bounds.Width, bounds.Height));
         var width = Math.Max(1, (int)Math.Ceiling((bounds.Width + padding * 2) * scale));

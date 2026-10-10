@@ -5,17 +5,20 @@ namespace Backdrop;
 
 internal sealed class BackgroundSettingsDialog : Form
 {
-    private readonly DarkComboBox _mode = new();
-    private readonly DarkComboBox _pattern = new();
+    private readonly BackdropDropdown _mode = new();
+    private readonly BackdropDropdown _pattern = new();
+    private readonly BackdropNumberSelector _autoGradientLightenPercent = new() { Minimum = 0, Maximum = 100, Increment = 5 };
     private readonly ColorSelectionRow _color1;
     private readonly ColorSelectionRow _color2;
-    private readonly TableLayoutPanel _fields = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 4, BackColor = BackdropPalette.Surface, Margin = Padding.Empty };
+    private readonly TableLayoutPanel _fields = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 5, BackColor = BackdropPalette.Surface, Margin = Padding.Empty };
+    private readonly Control _autoGradientLightenRow;
     private readonly Control _patternRow;
 
     public event EventHandler? DraftChanged;
 
     public BackgroundMode SelectedMode => (BackgroundMode)_mode.SelectedIndex;
     public BackgroundPattern SelectedPattern => (BackgroundPattern)_pattern.SelectedIndex;
+    public int AutoGradientLightenPercent => (int)_autoGradientLightenPercent.Value;
     public string Color1Hex => _color1.ColorHex;
     public string Color2Hex => _color2.ColorHex;
 
@@ -52,22 +55,27 @@ internal sealed class BackgroundSettingsDialog : Form
         _mode.AccessibleName = "Background mode";
         _mode.Items.AddRange(["Automatic gradient", "Solid color", "Two-color gradient", "Pattern"]);
         _mode.SelectedIndex = (int)settings.BackgroundMode;
-        _mode.DrawItem += DrawComboItem;
         _pattern.AccessibleName = "Pattern style";
         _pattern.Items.AddRange(["Soft grain", "Dots"]);
         _pattern.SelectedIndex = (int)settings.BackgroundPattern;
-        _pattern.DrawItem += DrawComboItem;
+        _autoGradientLightenPercent.Value = settings.AutoGradientLightenPercent;
+        _autoGradientLightenPercent.BackColor = BackdropPalette.Field;
+        _autoGradientLightenPercent.ForeColor = BackdropPalette.Text;
+        _autoGradientLightenPercent.AccessibleName = "Automatic gradient color lightening";
+        _autoGradientLightenPercent.AccessibleDescription = "Blend automatic gradient colors with white by this percentage. Zero keeps the sampled colors.";
         _color1 = new ColorSelectionRow("Base color", settings.BackgroundColor1Hex);
         _color2 = new ColorSelectionRow("End color", settings.BackgroundColor2Hex);
 
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 5; i++)
             _fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _fields.Controls.Add(CreateComboRow("Background mode", _mode), 0, 0);
-        _fields.Controls.Add(_color1, 0, 1);
-        _fields.Controls.Add(_color2, 0, 2);
+        _autoGradientLightenRow = CreateNumericRow("Lighten colors (%)", _autoGradientLightenPercent);
+        _fields.Controls.Add(_autoGradientLightenRow, 0, 1);
+        _fields.Controls.Add(_color1, 0, 2);
+        _fields.Controls.Add(_color2, 0, 3);
         _patternRow = CreateComboRow("Pattern style", _pattern);
-        _fields.Controls.Add(_patternRow, 0, 3);
+        _fields.Controls.Add(_patternRow, 0, 4);
 
         var note = new Label
         {
@@ -138,6 +146,7 @@ internal sealed class BackgroundSettingsDialog : Form
             UpdateVisibleFields();
             DraftChanged?.Invoke(this, EventArgs.Empty);
         };
+        _autoGradientLightenPercent.ValueChanged += (_, _) => DraftChanged?.Invoke(this, EventArgs.Empty);
         _pattern.SelectedIndexChanged += (_, _) => DraftChanged?.Invoke(this, EventArgs.Empty);
         _color1.ColorChanged += (_, _) => DraftChanged?.Invoke(this, EventArgs.Empty);
         _color2.ColorChanged += (_, _) => DraftChanged?.Invoke(this, EventArgs.Empty);
@@ -146,12 +155,13 @@ internal sealed class BackgroundSettingsDialog : Form
 
     private void UpdateVisibleFields()
     {
+        _autoGradientLightenRow.Visible = SelectedMode == BackgroundMode.AutoGradient;
         _color1.Visible = SelectedMode is BackgroundMode.SolidColor or BackgroundMode.CustomGradient or BackgroundMode.Pattern;
         _color2.Visible = SelectedMode == BackgroundMode.CustomGradient;
         _patternRow.Visible = SelectedMode == BackgroundMode.Pattern;
     }
 
-    private static Control CreateComboRow(string labelText, DarkComboBox combo)
+    private static Control CreateComboRow(string labelText, BackdropDropdown combo)
     {
         var row = new TableLayoutPanel
         {
@@ -178,24 +188,48 @@ internal sealed class BackgroundSettingsDialog : Form
             Margin = new Padding(0)
         };
         combo.Dock = DockStyle.Fill;
-        combo.Height = 34;
+        combo.Height = 38;
+        combo.MinimumSize = new Size(0, 38);
         combo.Margin = new Padding(0);
         row.Controls.Add(label, 0, 0);
         row.Controls.Add(combo, 1, 0);
         return row;
     }
 
-    private static void DrawComboItem(object? sender, DrawItemEventArgs e)
+    private static Control CreateNumericRow(string labelText, BackdropNumberSelector numeric)
     {
-        e.DrawBackground();
-        if (sender is not ComboBox combo || e.Index < 0)
-            return;
-        var selected = (e.State & DrawItemState.Selected) != 0;
-        using var brush = new SolidBrush(selected ? BackdropPalette.Selection : BackdropPalette.Field);
-        e.Graphics.FillRectangle(brush, e.Bounds);
-        TextRenderer.DrawText(e.Graphics, combo.GetItemText(combo.Items[e.Index]), combo.Font, e.Bounds,
-            BackdropPalette.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
-        e.DrawFocusRectangle();
+        var row = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 1,
+            Width = 460,
+            MinimumSize = new Size(460, 40),
+            Dock = DockStyle.Fill,
+            BackColor = BackdropPalette.Surface,
+            Margin = new Padding(0, 0, 0, 6)
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        var label = new Label
+        {
+            Text = labelText,
+            AutoSize = true,
+            ForeColor = BackdropPalette.Muted,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0)
+        };
+        numeric.Dock = DockStyle.Fill;
+        numeric.Height = 38;
+        numeric.MinimumSize = new Size(0, 38);
+        numeric.Font = new Font("Segoe UI", 10F);
+        numeric.Margin = new Padding(0);
+        numeric.RefreshAccessibility();
+        row.Controls.Add(label, 0, 0);
+        row.Controls.Add(numeric, 1, 0);
+        return row;
     }
 
     [DllImport("dwmapi.dll", PreserveSig = true)]
@@ -330,16 +364,10 @@ internal sealed class BackgroundSettingsDialog : Form
 
         private void ChooseColor()
         {
-            using var dialog = new ColorDialog
-            {
-                FullOpen = true,
-                AnyColor = true,
-                SolidColorOnly = true,
-                Color = _color
-            };
+            using var dialog = new BackdropColorPickerDialog(_color);
             if (dialog.ShowDialog(FindForm()) != DialogResult.OK)
                 return;
-            SetColor(dialog.Color);
+            SetColor(dialog.SelectedColor);
         }
 
         private void SetColor(string hex)

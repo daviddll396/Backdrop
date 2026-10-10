@@ -20,6 +20,7 @@ internal sealed class AppSettings
     public string BackgroundColor1Hex { get; set; } = "#303137";
     public string BackgroundColor2Hex { get; set; } = "#4B4C53";
     public BackgroundPattern BackgroundPattern { get; set; } = BackgroundPattern.SoftGrain;
+    public int AutoGradientLightenPercent { get; set; } = 20;
 
     public AppSettings Copy() => new()
     {
@@ -31,7 +32,8 @@ internal sealed class AppSettings
         BackgroundMode = BackgroundMode,
         BackgroundColor1Hex = BackgroundColor1Hex,
         BackgroundColor2Hex = BackgroundColor2Hex,
-        BackgroundPattern = BackgroundPattern
+        BackgroundPattern = BackgroundPattern,
+        AutoGradientLightenPercent = AutoGradientLightenPercent
     };
 
     public bool IsValid() =>
@@ -43,7 +45,8 @@ internal sealed class AppSettings
         Enum.IsDefined(BackgroundMode) &&
         IsValidColorHex(BackgroundColor1Hex) &&
         IsValidColorHex(BackgroundColor2Hex) &&
-        Enum.IsDefined(BackgroundPattern);
+        Enum.IsDefined(BackgroundPattern) &&
+        AutoGradientLightenPercent is >= 0 and <= 100;
 
     private static bool IsValidColorHex(string? value) =>
         value is { Length: 7 } && value[0] == '#' &&
