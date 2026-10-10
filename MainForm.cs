@@ -24,20 +24,33 @@ internal sealed class MainForm : Form
     private readonly ToolTip _settingTooltips = new();
     private readonly DarkComboBox _ratio = new();
     private readonly SegmentedChoiceControl _layout = new("Auto", "Row", "Grid");
-    private readonly ListBox _imageList = new() { IntegralHeight = false, SelectionMode = SelectionMode.One, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 22 };
+    private readonly ListBox _imageList = new() { IntegralHeight = false, SelectionMode = SelectionMode.One, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 26, Margin = Padding.Empty };
     private readonly PictureBox _preview = new() { SizeMode = PictureBoxSizeMode.Zoom, BackColor = PreviewColor, Visible = false };
+    private readonly SmallBusySpinner _previewSpinner = new() { Visible = false };
     private readonly Panel _previewFrame = new() { BackColor = Color.FromArgb(42, 43, 48), Padding = new Padding(14) };
     private readonly Label _previewPlaceholder = new() { Text = "Preparing preview…", TextAlign = ContentAlignment.MiddleCenter, Dock = DockStyle.Fill, ForeColor = MutedColor, BackColor = PreviewColor };
     private readonly Label _previewCaption = new() { AutoSize = true, ForeColor = MutedColor, Text = "A sample composition will appear here." };
     private readonly Label _previewImageCount = new() { AutoSize = false, ForeColor = MutedColor, Text = "SAMPLE" };
     private readonly Button _backgroundButton = MakeButton("Background");
-    private readonly Label _backgroundModeLabel = new() { AutoSize = true, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleLeft };
-    private readonly Label _selectedCount = new() { AutoSize = true, ForeColor = MutedColor };
+    private readonly Label _backgroundModeLabel = new() { AutoSize = false, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly Label _selectedCount = new() { AutoSize = true, ForeColor = MutedColor, AccessibleName = "Selected image count" };
     private readonly Label _status = new() { AutoSize = true, ForeColor = MutedColor, Text = "Add images to begin. Preview updates as you edit." };
-    private readonly Button _moveUp = MakeButton("Up");
-    private readonly Button _moveDown = MakeButton("Down");
+    private readonly Button _moveUp = MakeButton("‹");
+    private readonly Button _moveDown = MakeButton("›");
     private readonly Button _removeSelectedButton = MakeButton("Remove");
     private readonly Button _clearImagesButton = MakeButton("Clear");
+    private readonly Panel _imageListHost = new() { Dock = DockStyle.Fill, BackColor = FieldColor, Margin = Padding.Empty };
+    private readonly Label _imageHint = new()
+    {
+        Text = "Add or drop up to 9 images.",
+        Dock = DockStyle.Fill,
+        TextAlign = ContentAlignment.MiddleCenter,
+        ForeColor = MutedColor,
+        BackColor = FieldColor,
+        TabStop = false,
+        Margin = Padding.Empty,
+        AccessibleName = "Add or drop up to nine images"
+    };
     private readonly Button _generateButton = MakeButton("Create PNG", primary: true);
     private readonly Button _shortcutButton = MakeButton("Enable right-click shortcut");
     private readonly Button _openImageButton = MakeButton("Open image");
@@ -45,6 +58,7 @@ internal sealed class MainForm : Form
     private readonly FlowLayoutPanel _outputActions = new() { Dock = DockStyle.Fill, WrapContents = false, Visible = false, Margin = Padding.Empty };
     private readonly System.Windows.Forms.Timer _previewTimer = new() { Interval = 200 };
     private readonly SemaphoreSlim _previewGate = new(1, 1);
+    private readonly BackdropRenderer.PreviewImageCache _previewImageCache = new();
     private CancellationTokenSource? _previewCancellation;
     private CancellationTokenSource? _runningPreviewCancellation;
     private CancellationTokenSource? _exportCancellation;
@@ -64,9 +78,10 @@ internal sealed class MainForm : Form
     {
         var initialSettings = settings.IsValid() ? settings.Copy() : new AppSettings();
         Text = "Backdrop";
+        Icon = LoadWindowIcon();
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        MinimumSize = new Size(800, 600);
+        MinimumSize = SizeFromClientSize(new Size(800, 600));
         ClientSize = new Size(960, 720);
         Font = new Font("Segoe UI", 9.5F);
         BackColor = WindowColor;
@@ -175,6 +190,7 @@ internal sealed class MainForm : Form
         _previewCancellation?.Cancel();
         if (!ReferenceEquals(_previewCancellation, _runningPreviewCancellation))
             _previewCancellation?.Dispose();
+        _ = DisposePreviewImageCacheWhenIdleAsync();
         base.OnFormClosed(e);
     }
 
@@ -247,44 +263,43 @@ internal sealed class MainForm : Form
         card.Margin = new Padding(0, 0, 14, 0);
         var body = CreateCardInterior();
         card.Controls.Add(body);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = SurfaceColor, Padding = new Padding(15) };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = SurfaceColor, Padding = new Padding(15) };
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = SurfaceColor, Margin = Padding.Empty };
         heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 20));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
         heading.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         heading.Controls.Add(SectionLabel("PREVIEW"), 0, 0);
-        var backgroundActions = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            BackColor = SurfaceColor,
-            Margin = Padding.Empty,
-            Padding = Padding.Empty,
-            Anchor = AnchorStyles.Left
-        };
+        _previewSpinner.Anchor = AnchorStyles.None;
+        heading.Controls.Add(_previewSpinner, 1, 0);
+        _previewImageCount.TextAlign = ContentAlignment.MiddleRight;
+        _previewImageCount.Dock = DockStyle.Fill;
+        heading.Controls.Add(_previewImageCount, 2, 0);
+
+        var backgroundActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = SurfaceColor, Margin = Padding.Empty };
+        backgroundActions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+        backgroundActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        backgroundActions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _backgroundButton.Width = 104;
         _backgroundButton.Height = 32;
+        _backgroundButton.Dock = DockStyle.Fill;
+        _backgroundButton.Margin = new Padding(0, 3, 8, 3);
         _backgroundButton.AccessibleName = "Edit composition background";
         _backgroundButton.AccessibleDescription = "Choose automatic, solid, gradient, or patterned background colors.";
         _backgroundButton.Click += (_, _) => EditBackground();
         _settingTooltips.SetToolTip(_backgroundButton, "Choose and preview a background. Save preferences to keep changes.");
-        _backgroundModeLabel.Margin = new Padding(7, 0, 0, 0);
-        _backgroundModeLabel.AutoSize = false;
-        _backgroundModeLabel.Width = 68;
+        _backgroundModeLabel.Margin = new Padding(4, 0, 0, 0);
         _backgroundModeLabel.Dock = DockStyle.Fill;
-        backgroundActions.Controls.Add(_backgroundButton);
-        backgroundActions.Controls.Add(_backgroundModeLabel);
-        heading.Controls.Add(backgroundActions, 1, 0);
-        _previewImageCount.TextAlign = ContentAlignment.MiddleRight;
-        _previewImageCount.Dock = DockStyle.Fill;
-        heading.Controls.Add(_previewImageCount, 2, 0);
+        _backgroundModeLabel.AutoEllipsis = false;
+        backgroundActions.Controls.Add(_backgroundButton, 0, 0);
+        backgroundActions.Controls.Add(_backgroundModeLabel, 1, 0);
         UpdateBackgroundModeLabel();
         layout.Controls.Add(heading, 0, 0);
+        layout.Controls.Add(backgroundActions, 0, 1);
 
         _preview.Dock = DockStyle.Fill;
         _preview.AccessibleName = "Composition preview";
@@ -292,8 +307,8 @@ internal sealed class MainForm : Form
         _previewFrame.AccessibleName = "Preview image area";
         _previewFrame.Controls.Add(_preview);
         _previewFrame.Controls.Add(_previewPlaceholder);
-        layout.Controls.Add(_previewFrame, 0, 1);
-        layout.Controls.Add(_previewCaption, 0, 2);
+        layout.Controls.Add(_previewFrame, 0, 2);
+        layout.Controls.Add(_previewCaption, 0, 3);
         body.Controls.Add(layout);
         SetDropTarget(_previewFrame);
         SetDropTarget(_preview);
@@ -315,25 +330,20 @@ internal sealed class MainForm : Form
 
     private Control BuildSettingsCard()
     {
-        var card = CreateCard();
-        var body = CreateCardInterior();
-        card.Controls.Add(body);
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = SurfaceColor, Padding = new Padding(10) };
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
-        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        content.Controls.Add(SectionLabel("COMPOSITION"), 0, 0);
+        var card = new Panel { Dock = DockStyle.Fill, BackColor = SurfaceColor, Padding = Padding.Empty };
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1, BackColor = SurfaceColor, Padding = new Padding(10) };
 
-        var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 3, BackColor = SurfaceColor, Margin = Padding.Empty };
-        for (var column = 0; column < 3; column++)
-            fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        for (var row = 0; row < 3; row++)
-            fields.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / 3));
+        var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, BackColor = SurfaceColor, Margin = Padding.Empty };
+        fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        for (var row = 0; row < 4; row++)
+            fields.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
         var ratioField = MakeSettingField("Canvas ratio", _ratio);
         fields.Controls.Add(ratioField, 0, 0);
-        fields.SetColumnSpan(ratioField, 3);
+        fields.SetColumnSpan(ratioField, 2);
         var layoutField = MakeSettingField("Layout", _layout);
         fields.Controls.Add(layoutField, 0, 1);
-        fields.SetColumnSpan(layoutField, 3);
+        fields.SetColumnSpan(layoutField, 2);
         _ratio.DrawItem += DrawComboItem;
         _outputWidth.AccessibleName = "Canvas long edge in pixels";
         _outputWidth.AccessibleDescription = "Output canvas long edge in pixels, from 640 to 4096.";
@@ -344,11 +354,13 @@ internal sealed class MainForm : Form
         _settingTooltips.SetToolTip(_outputWidth, "Canvas long edge in pixels (640–4096)." );
         _settingTooltips.SetToolTip(_padding, "Padding around each picture, as a percent of the canvas.");
         _settingTooltips.SetToolTip(_shadow, "Shadow strength, as a percent.");
-        fields.Controls.Add(MakeSettingField("Size", _outputWidth), 0, 2);
-        fields.Controls.Add(MakeSettingField("Padding", _padding), 1, 2);
-        fields.Controls.Add(MakeSettingField("Shadow", _shadow), 2, 2);
-        content.Controls.Add(fields, 0, 1);
-        body.Controls.Add(content);
+        var sizeField = MakeSettingField("Size (px)", _outputWidth);
+        fields.Controls.Add(sizeField, 0, 2);
+        fields.SetColumnSpan(sizeField, 2);
+        fields.Controls.Add(MakeSettingField("Padding (%)", _padding), 0, 3);
+        fields.Controls.Add(MakeSettingField("Shadow (%)", _shadow), 1, 3);
+        content.Controls.Add(fields, 0, 0);
+        card.Controls.Add(content);
         return card;
     }
 
@@ -357,39 +369,34 @@ internal sealed class MainForm : Form
         var card = CreateCard();
         var body = CreateCardInterior();
         card.Controls.Add(body);
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, BackColor = SurfaceColor, Padding = new Padding(10) };
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 23));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = SurfaceColor, Padding = new Padding(10) };
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
 
-        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = SurfaceColor };
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        heading.Controls.Add(SectionLabel("IMAGES"), 0, 0);
+        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = SurfaceColor, Margin = Padding.Empty };
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 38));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
+        heading.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _selectedCount.Dock = DockStyle.Fill;
-        _selectedCount.TextAlign = ContentAlignment.MiddleRight;
-        heading.Controls.Add(_selectedCount, 1, 0);
-        content.Controls.Add(heading, 0, 0);
-
-        var listActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = SurfaceColor, Margin = Padding.Empty };
-        listActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 68));
-        listActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32));
-        listActions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _selectedCount.TextAlign = ContentAlignment.MiddleCenter;
+        heading.Controls.Add(_selectedCount, 0, 0);
         var addButton = MakeButton("Add images");
         addButton.Dock = DockStyle.Fill;
-        addButton.Margin = new Padding(0, 0, 4, 0);
+        addButton.Margin = Padding.Empty;
         addButton.AccessibleName = "Add up to nine images";
         addButton.Click += (_, _) => ChooseImages();
-        listActions.Controls.Add(addButton, 0, 0);
+        _settingTooltips.SetToolTip(addButton, "Add images to the composition.");
+        heading.Controls.Add(addButton, 1, 0);
         _clearImagesButton.Dock = DockStyle.Fill;
-        _clearImagesButton.Margin = new Padding(4, 0, 0, 0);
+        _clearImagesButton.Margin = Padding.Empty;
         _clearImagesButton.AccessibleName = "Clear all images";
         _clearImagesButton.Click += (_, _) => ClearImages();
         _settingTooltips.SetToolTip(_clearImagesButton, "Remove all images from the list.");
-        listActions.Controls.Add(_clearImagesButton, 1, 0);
-        content.Controls.Add(listActions, 0, 1);
+        heading.Controls.Add(_clearImagesButton, 2, 0);
+        content.Controls.Add(heading, 0, 0);
 
         _imageList.Dock = DockStyle.Fill;
         _imageList.BackColor = FieldColor;
@@ -399,21 +406,25 @@ internal sealed class MainForm : Form
         _imageList.AccessibleName = "Images in composition order";
         _imageList.DrawItem += DrawImageListItem;
         _imageList.SelectedIndexChanged += (_, _) => UpdateMoveButtons();
-        content.Controls.Add(_imageList, 0, 2);
+        _imageListHost.Controls.Add(_imageList);
+        _imageListHost.Controls.Add(_imageHint);
+        content.Controls.Add(_imageListHost, 0, 1);
 
         var moveButtons = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = SurfaceColor, Margin = Padding.Empty };
-        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
-        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
-        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.334F));
+        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        moveButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         moveButtons.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _moveUp.Dock = DockStyle.Fill;
         _moveDown.Dock = DockStyle.Fill;
         _moveUp.Margin = new Padding(0, 3, 4, 0);
         _moveDown.Margin = new Padding(4, 3, 0, 0);
-        _moveUp.AccessibleName = "Move selected image up";
-        _moveDown.AccessibleName = "Move selected image down";
-        _settingTooltips.SetToolTip(_moveUp, "Move the selected image up. Shortcut: Alt + Up.");
-        _settingTooltips.SetToolTip(_moveDown, "Move the selected image down. Shortcut: Alt + Down.");
+        _moveUp.AccessibleName = "Move selected image to previous position";
+        _moveUp.AccessibleDescription = "Move the selected image one place earlier in the composition.";
+        _moveDown.AccessibleName = "Move selected image to next position";
+        _moveDown.AccessibleDescription = "Move the selected image one place later in the composition.";
+        _settingTooltips.SetToolTip(_moveUp, "Move the selected image to the previous position. Shortcut: Alt + Up.");
+        _settingTooltips.SetToolTip(_moveDown, "Move the selected image to the next position. Shortcut: Alt + Down.");
         _moveUp.Click += (_, _) => MoveSelectedImage(-1);
         _moveDown.Click += (_, _) => MoveSelectedImage(1);
         _removeSelectedButton.Dock = DockStyle.Fill;
@@ -424,18 +435,20 @@ internal sealed class MainForm : Form
         moveButtons.Controls.Add(_moveUp, 0, 0);
         moveButtons.Controls.Add(_moveDown, 1, 0);
         moveButtons.Controls.Add(_removeSelectedButton, 2, 0);
-        content.Controls.Add(moveButtons, 0, 3);
+        content.Controls.Add(moveButtons, 0, 2);
 
-        var hint = new Label { Text = "Drop files here · Alt + ↑ / ↓ to reorder", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, AutoSize = true, Font = Font, ForeColor = MutedColor };
-        content.RowStyles[4] = new RowStyle(SizeType.Absolute, hint.PreferredHeight + 2);
+        var hint = new Label { Text = "Alt + ↑ / ↓ to reorder", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, AutoSize = true, Font = Font, ForeColor = MutedColor };
+        content.RowStyles[3] = new RowStyle(SizeType.Absolute, hint.PreferredHeight + 2);
         hint.AutoSize = false;
         hint.AccessibleName = "Image reorder instructions";
-        content.Controls.Add(hint, 0, 4);
+        content.Controls.Add(hint, 0, 3);
         body.Controls.Add(content);
         _imageList.DragEnter += AcceptImageDrop;
         _imageList.DragDrop += AddDroppedImages;
         SetDropTarget(card);
         SetDropTarget(body);
+        SetDropTarget(_imageListHost);
+        SetDropTarget(_imageHint);
         SetDropTarget(hint);
         return card;
     }
@@ -472,7 +485,7 @@ internal sealed class MainForm : Form
         return footer;
     }
 
-    private static Panel CreateCard() => new() { Dock = DockStyle.Fill, BackColor = BorderColor, Padding = new Padding(1) };
+    private static Panel CreateCard() => new() { Dock = DockStyle.Fill, BackColor = SurfaceColor, Padding = Padding.Empty };
 
     private static Panel CreateCardInterior() => new() { Dock = DockStyle.Fill, BackColor = SurfaceColor, Padding = Padding.Empty };
 
@@ -546,10 +559,18 @@ internal sealed class MainForm : Form
         var selected = (e.State & DrawItemState.Selected) != 0;
         using var brush = new SolidBrush(selected ? Color.FromArgb(68, 70, 77) : FieldColor);
         e.Graphics.FillRectangle(brush, e.Bounds);
-        TextRenderer.DrawText(e.Graphics, _imageList.Items[e.Index]?.ToString() ?? "", _imageList.Font, e.Bounds, TextColor,
+        var numberBounds = new Rectangle(e.Bounds.Left + 8, e.Bounds.Top, 22, e.Bounds.Height);
+        var nameBounds = new Rectangle(e.Bounds.Left + 34, e.Bounds.Top, Math.Max(0, e.Bounds.Width - 42), e.Bounds.Height);
+        TextRenderer.DrawText(e.Graphics, (e.Index + 1).ToString(), _imageList.Font, numberBounds, MutedColor,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        var name = e.Index < _imagePaths.Length ? Path.GetFileName(_imagePaths[e.Index]) : _imageList.Items[e.Index]?.ToString() ?? "";
+        TextRenderer.DrawText(e.Graphics, name, _imageList.Font, nameBounds, TextColor,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         if ((e.State & DrawItemState.Focus) != 0)
-            e.DrawFocusRectangle();
+        {
+            using var focus = new Pen(BackdropPalette.Focus);
+            e.Graphics.DrawRectangle(focus, e.Bounds.Left + 1, e.Bounds.Top + 1, e.Bounds.Width - 3, e.Bounds.Height - 3);
+        }
     }
 
     private void WirePreviewEvents()
@@ -577,6 +598,7 @@ internal sealed class MainForm : Form
         _previewPlaceholder.Visible = _preview.Image is null;
         _previewCaption.Text = "Updating preview…";
         _status.Text = "Updating preview…";
+        _previewSpinner.StartSpinning();
     }
 
     private async void PreviewTimer_Tick(object? sender, EventArgs e)
@@ -596,11 +618,15 @@ internal sealed class MainForm : Form
             await _previewGate.WaitAsync(cancellation.Token);
             try
             {
-                image = await Task.Run(
-                    () => paths.Length == 0
-                        ? BackdropRenderer.CreateSamplePreview(settings, BackdropRenderer.MaximumPreviewLongEdge)
-                        : BackdropRenderer.RenderPreviewFiles(paths, settings, cancellation.Token),
-                    cancellation.Token);
+                image = await Task.Run(() =>
+                {
+                    if (paths.Length == 0)
+                    {
+                        _previewImageCache.Clear();
+                        return BackdropRenderer.CreateSamplePreview(settings, BackdropRenderer.MaximumPreviewLongEdge);
+                    }
+                    return BackdropRenderer.RenderPreviewFiles(paths, settings, _previewImageCache, cancellation.Token);
+                }, cancellation.Token);
             }
             finally
             {
@@ -611,6 +637,7 @@ internal sealed class MainForm : Form
                 return;
             ReplacePreview(image);
             image = null;
+            _previewSpinner.StopSpinning();
             _previewCaption.Text = paths.Length == 0
                 ? "Sample only · add images to preview your composition."
                 : $"{paths.Length} image{(paths.Length == 1 ? "" : "s")} · no cropping.";
@@ -624,6 +651,7 @@ internal sealed class MainForm : Form
         {
             if (request == _previewRequest && !IsDisposed)
             {
+                _previewSpinner.StopSpinning();
                 _previewCaption.Text = $"Preview could not be updated: {ex.Message}";
                 _previewPlaceholder.Text = "Preview unavailable";
                 _status.Text = "Check that the selected images are valid and available.";
@@ -632,11 +660,26 @@ internal sealed class MainForm : Form
         finally
         {
             image?.Dispose();
+            if (request == _previewRequest && cancellation.IsCancellationRequested && !IsDisposed)
+                _previewSpinner.StopSpinning();
             cancellation.Dispose();
             if (ReferenceEquals(_runningPreviewCancellation, cancellation))
                 _runningPreviewCancellation = null;
             if (ReferenceEquals(_previewCancellation, cancellation))
                 _previewCancellation = null;
+        }
+    }
+
+    private async Task DisposePreviewImageCacheWhenIdleAsync()
+    {
+        await _previewGate.WaitAsync();
+        try
+        {
+            _previewImageCache.Dispose();
+        }
+        finally
+        {
+            _previewGate.Release();
         }
     }
 
@@ -663,6 +706,31 @@ internal sealed class MainForm : Form
         BackgroundColor2Hex = _backgroundColor2Hex,
         BackgroundPattern = _backgroundPattern
     };
+
+    private static Icon LoadWindowIcon()
+    {
+        var executablePath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executablePath) ||
+            !Path.GetFileName(executablePath).Equals("Backdrop.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            executablePath = Path.Combine(AppContext.BaseDirectory, "Backdrop.exe");
+        }
+
+        if (File.Exists(executablePath))
+        {
+            try
+            {
+                using var extracted = Icon.ExtractAssociatedIcon(executablePath);
+                if (extracted is not null)
+                    return (Icon)extracted.Clone();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or ExternalException)
+            {
+            }
+        }
+
+        return SystemIcons.Application;
+    }
 
     private void EditBackground()
     {
@@ -701,11 +769,11 @@ internal sealed class MainForm : Form
     {
         _backgroundModeLabel.Text = _backgroundMode switch
         {
-            BackgroundMode.AutoGradient => "Auto",
-            BackgroundMode.SolidColor => "Solid",
-            BackgroundMode.CustomGradient => "Gradient",
-            BackgroundMode.Pattern => _backgroundPattern == BackgroundPattern.Dots ? "Dots" : "Grain",
-            _ => "Auto"
+            BackgroundMode.AutoGradient => "Automatic gradient",
+            BackgroundMode.SolidColor => "Solid color",
+            BackgroundMode.CustomGradient => "Two-color gradient",
+            BackgroundMode.Pattern => _backgroundPattern == BackgroundPattern.Dots ? "Dots pattern" : "Soft-grain pattern",
+            _ => "Automatic gradient"
         };
         _backgroundModeLabel.AccessibleName = $"Current background: {_backgroundModeLabel.Text}";
         _backgroundButton.AccessibleDescription = $"Current background: {_backgroundModeLabel.Text}. Edit background colors and pattern.";
@@ -778,8 +846,10 @@ internal sealed class MainForm : Form
             _imageList.EndUpdate();
         }
         _selectedCount.Text = _imagePaths.Length == 0
-            ? $"0 / {BackdropRenderer.MaximumImages}"
-            : $"{_imagePaths.Length} / {BackdropRenderer.MaximumImages}";
+            ? $"0/{BackdropRenderer.MaximumImages}"
+            : $"{_imagePaths.Length}/{BackdropRenderer.MaximumImages}";
+        _imageHint.Visible = _imagePaths.Length == 0;
+        _imageList.Visible = _imagePaths.Length > 0;
         _previewImageCount.Text = _imagePaths.Length == 0 ? "SAMPLE" : $"{_imagePaths.Length} IMAGE{(_imagePaths.Length == 1 ? "" : "S")}";
         UpdateMoveButtons();
         UpdateGenerateButton();

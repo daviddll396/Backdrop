@@ -212,6 +212,7 @@ internal static class SelfCheckRunner
                 Path.Combine(inputFolder, "landscape.png"),
                 Path.Combine(inputFolder, "portrait three café.png")
             };
+            CheckPreviewImageCache(runFolder);
             var originalHashes = paths.Select(path => SHA256.HashData(File.ReadAllBytes(path))).ToArray();
             var settings = new AppSettings();
             Assert(settings.CanvasRatio == CanvasRatio.Wide16x9 && settings.Layout == CompositionLayout.Auto, "New and legacy preferences use the wide automatic defaults");
@@ -302,6 +303,7 @@ internal static class SelfCheckRunner
                     "Three portrait sample screens use the shared Auto row composition");
 
             CheckBackgroundModes(settings, runFolder, paths[0]);
+            CheckGradientDithering(settings, runFolder, paths[0]);
 
             ExpectThrows<ArgumentOutOfRangeException>(
                 () => BackdropRenderer.RenderFiles(Enumerable.Repeat("unused.png", 10).ToArray(), settings),
@@ -354,6 +356,10 @@ internal static class SelfCheckRunner
                 Application.DoEvents();
                 AssertSidebarLabelSizing(form, "wide");
                 AssertBackgroundHeaderSizing(form, "wide");
+                AssertImageHeaderSizing(form, "wide");
+                AssertImageHintState(form, expectedVisible: false, "wide populated");
+                Assert(form.MinimumSize.Width > 800 && form.MinimumSize.Height > 600,
+                    "Minimum outer window size includes the frame around an 800x600 client area");
                 CaptureForm(form, Path.Combine(runFolder, "form-preview.png"), new Size(960, 720));
                 form.Opacity = 1;
                 CaptureNativeForm(form, Path.Combine(runFolder, "form-preview-live-wide.png"));
@@ -362,9 +368,11 @@ internal static class SelfCheckRunner
                 Application.DoEvents();
                 AssertSidebarLabelSizing(form, "compact");
                 AssertBackgroundHeaderSizing(form, "compact");
+                AssertImageHeaderSizing(form, "compact");
+                AssertImageHintState(form, expectedVisible: false, "compact populated");
                 CaptureForm(form, Path.Combine(runFolder, "form-preview-compact.png"), new Size(800, 600));
                 CaptureNativeForm(form, Path.Combine(runFolder, "form-preview-live-compact.png"));
-                AssertDarkControlChrome(form);
+                AssertDarkControlChrome(form, runFolder);
 
                 using (var backgroundDialog = new BackgroundSettingsDialog(settings))
                 {
@@ -405,6 +413,30 @@ internal static class SelfCheckRunner
                         baseColorRow.Left >= 0 && baseColorRow.Right <= editorFields.ClientSize.Width &&
                         VisibleChildrenFit(baseColorRow),
                         $"Pattern base-color row is visible and fits inside the editor field area (row {baseColorRow.Bounds}, area {editorFields.ClientSize}, children {DescribeControls(baseColorRow)})");
+                    combos[0].DroppedDown = true;
+                    Application.DoEvents();
+                    Assert(combos[0].DroppedDown, "Native background mode dropdown opens while keeping its selected value");
+                    CaptureScreenForm(backgroundDialog, Path.Combine(runFolder, "background-editor-dropdown-open.png"));
+                    combos[0].DroppedDown = false;
+                    var baseColorEditor = (TextBox)colorRows[0];
+                    var originalColor = backgroundDialog.Color1Hex;
+                    var draftChangesBeforeHex = draftChanges;
+                    baseColorEditor.Text = "#12G456";
+                    Assert(backgroundDialog.Color1Hex == originalColor && draftChanges == draftChangesBeforeHex &&
+                        !(bool)baseColorRow.GetType().GetProperty("HasValidHex")!.GetValue(baseColorRow)!,
+                        "Invalid editable hex remains uncommitted and does not update the live draft");
+                    Descendants(backgroundDialog).OfType<Button>().Single(button => button.Text == "Apply").PerformClick();
+                    Assert(backgroundDialog.DialogResult != DialogResult.OK && baseColorEditor.Text == "#12G456",
+                        "Apply keeps the dialog open and preserves invalid hex until it is corrected");
+                    baseColorEditor.Text = "#12AB34";
+                    Assert(backgroundDialog.Color1Hex == "#12AB34" && draftChanges > draftChangesBeforeHex,
+                        "Valid editable hex updates the opaque color and live draft");
+                    var quickColors = baseColorRow.Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>().ToArray();
+                    Assert(quickColors.Length == 8 && quickColors.All(button => !string.IsNullOrWhiteSpace(button.AccessibleName)),
+                        "Quick color palette exposes eight named, keyboard-accessible choices");
+                    quickColors[0].PerformClick();
+                    Assert(backgroundDialog.Color1Hex == quickColors[0].AccessibleName!.Split(' ').Last(),
+                        "Quick color choice updates the edited color");
                     var patternRow = combos[1].Parent!;
                     Assert(patternRow.Visible && combos[1].Visible && patternRow.Right <= editorFields.ClientSize.Width &&
                         VisibleChildrenFit(patternRow),
@@ -435,6 +467,16 @@ internal static class SelfCheckRunner
                 Assert(imageList.Items.Count == 0 && GetField<Label>(form, "_previewImageCount").Text == "SAMPLE" &&
                     !generateButton.Enabled,
                     "Clear resets the list and disables PNG creation");
+                AssertImageHintState(form, expectedVisible: true, "compact empty");
+                Application.DoEvents();
+                CaptureNativeForm(form, Path.Combine(runFolder, "form-preview-empty-live-compact.png"));
+                form.ClientSize = new Size(960, 720);
+                form.PerformLayout();
+                Application.DoEvents();
+                AssertSidebarLabelSizing(form, "wide empty");
+                AssertBackgroundHeaderSizing(form, "wide empty");
+                AssertImageHintState(form, expectedVisible: true, "wide empty");
+                CaptureNativeForm(form, Path.Combine(runFolder, "form-preview-empty-live-wide.png"));
                 form.Close();
             }
 
@@ -442,14 +484,17 @@ internal static class SelfCheckRunner
             var report = string.Join(Environment.NewLine,
             [
                 "Backdrop self-check passed.",
-                "Checked: ratio defaults and presets, source aspect, row/grid order and centering, portrait layout, sample preview dimensions and Auto row, background defaults/modes/colors/pattern determinism, live editor visibility and draft events, collision-safe names, source preservation, image-count limit, enum validation, canceled preview/export cleanup, remove/clear list actions, preference round trip, rounded/dark control chrome, layout selection events, numeric bounds/value events, and 960x720/800x600 captures.",
+                "Checked: ratio defaults and presets, source aspect, row/grid order and centering, portrait layout, sample preview dimensions and Auto row, bounded preview cache reuse and file-change invalidation, automatic and custom colors, background patterns, gradient dithering and foreground preservation, live editor visibility and draft events, collision-safe names, source preservation, image-count limit, enum validation, canceled preview/export cleanup, remove/clear list actions, empty-list hint visibility, preference round trip, rounded/dark control chrome, layout selection events, numeric bounds/value events, and 960x720/800x600 captures.",
                 $"Sample: {sampleFile}",
                 $"Render: {Path.Combine(runFolder, "render-preview.png")}",
                 $"Form: {Path.Combine(runFolder, "form-preview.png")}",
                 $"Compact form: {Path.Combine(runFolder, "form-preview-compact.png")}",
                 $"Background editor: {Path.Combine(runFolder, "background-editor.png")}",
                 $"Compact native window: {Path.Combine(runFolder, "form-preview-live-compact.png")}",
+                $"Empty wide native window: {Path.Combine(runFolder, "form-preview-empty-live-wide.png")}",
+                $"Empty compact native window: {Path.Combine(runFolder, "form-preview-empty-live-compact.png")}",
                 $"Native background editor: {Path.Combine(runFolder, "background-editor-live.png")}"
+                ,$"Open background dropdown: {Path.Combine(runFolder, "background-editor-dropdown-open.png")}"
             ]);
             File.WriteAllText(Path.Combine(root, "last-run.txt"), runFolder + Environment.NewLine);
             File.WriteAllText(Path.Combine(runFolder, "self-check-report.txt"), report + Environment.NewLine);
@@ -497,10 +542,112 @@ internal static class SelfCheckRunner
         Assert(CountPixelDifferences(grainFirst, dotsFirst) > 0, "Dot and grain patterns render differently");
         dotsFirst.Save(Path.Combine(runFolder, "background-dots.png"), ImageFormat.Png);
 
+        var neutralPath = Path.Combine(runFolder, "automatic-neutral-source.png");
+        using (var neutral = new Bitmap(96, 96))
+        using (var graphics = Graphics.FromImage(neutral))
+        {
+            graphics.Clear(Color.FromArgb(18, 18, 18));
+            neutral.Save(neutralPath, ImageFormat.Png);
+        }
+        settings.BackgroundMode = BackgroundMode.AutoGradient;
+        using (var automatic = BackdropRenderer.RenderFiles([neutralPath], settings))
+        {
+            var first = automatic.GetPixel(0, 0);
+            var second = automatic.GetPixel(automatic.Width - 1, 0);
+            Assert(first.R == first.G && first.G == first.B && second.R == second.G && second.G == second.B &&
+                first.R > 128 && second.R > first.R + 30,
+                "Automatic monochrome gradients stay neutral while lifting dark endpoints and separating the colors");
+            automatic.Save(Path.Combine(runFolder, "automatic-neutral-gradient.png"), ImageFormat.Png);
+        }
+
         settings.BackgroundMode = BackgroundMode.SolidColor;
         var solidExport = BackdropRenderer.Generate([sourcePath], settings);
             using var exported = new Bitmap(solidExport);
         Assert(exported.GetPixel(0, 0).ToArgb() == expectedSolid.ToArgb(), "File export uses the same solid background renderer as the sample preview");
+    }
+
+    private static void CheckPreviewImageCache(string runFolder)
+    {
+        var path = Path.Combine(runFolder, "preview-cache-source.png");
+        var replacementPath = Path.Combine(runFolder, "preview-cache-replacement.png");
+        var unusedPath = Path.Combine(runFolder, "preview-cache-second.png");
+        using (var source = new Bitmap(1200, 2400))
+        using (var graphics = Graphics.FromImage(source))
+        {
+            graphics.Clear(Color.FromArgb(46, 85, 115));
+            source.Save(path, ImageFormat.Png);
+        }
+        using (var source = new Bitmap(100, 160))
+            source.Save(unusedPath, ImageFormat.Png);
+
+        using var cache = new BackdropRenderer.PreviewImageCache();
+        var first = cache.Load([path], CancellationToken.None)[0];
+        Assert(first.Width == 500 && first.Height == 1000 && cache.Count == 1,
+            "Preview cache stores a bounded 1000-pixel thumbnail while retaining the source pixel count");
+        Assert(ReferenceEquals(first, cache.Load([path], CancellationToken.None)[0]),
+            "Repeated preview edits reuse the cached reduced bitmap");
+        _ = cache.Load([path, unusedPath], CancellationToken.None);
+        Assert(cache.Count == 2, "Preview cache keeps the active ordered selection");
+
+        using (var source = new Bitmap(300, 180))
+        using (var graphics = Graphics.FromImage(source))
+        {
+            graphics.Clear(Color.FromArgb(92, 112, 128));
+            source.Save(replacementPath, ImageFormat.Png);
+        }
+        File.Move(replacementPath, path, overwrite: true);
+        var refreshed = cache.Load([path], CancellationToken.None)[0];
+        Assert(refreshed.Width == 300 && refreshed.Height == 180 && cache.Count == 1 && !ReferenceEquals(first, refreshed),
+            "Preview cache reloads a changed source and drops images outside the current selection");
+
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        ExpectThrows<OperationCanceledException>(() => cache.Load([path], cancelled.Token),
+            "Preview cache observes cancellation before loading a source");
+    }
+
+    private static void CheckGradientDithering(AppSettings defaults, string runFolder, string sourcePath)
+    {
+        var settings = defaults.Copy();
+        settings.OutputWidth = 1920;
+        settings.CanvasRatio = CanvasRatio.Wide16x9;
+        settings.PaddingPercent = 10;
+        settings.ShadowStrength = 0;
+        settings.BackgroundMode = BackgroundMode.CustomGradient;
+        settings.BackgroundColor1Hex = "#202020";
+        settings.BackgroundColor2Hex = "#282828";
+        var sourceHash = SHA256.HashData(File.ReadAllBytes(sourcePath));
+
+        using var gradient = BackdropRenderer.RenderFiles([sourcePath], settings);
+        gradient.Save(Path.Combine(runFolder, "gradient-dithered.png"), ImageFormat.Png);
+        var expectedStart = ColorTranslator.FromHtml(settings.BackgroundColor1Hex);
+        var expectedEnd = ColorTranslator.FromHtml(settings.BackgroundColor2Hex);
+        Assert(gradient.GetPixel(0, 0).ToArgb() == expectedStart.ToArgb() &&
+            gradient.GetPixel(gradient.Width - 1, 0).ToArgb() == expectedEnd.ToArgb(),
+            "Dithered gradient keeps its exact endpoint colors");
+        Assert(CountDistinctColorsInColumn(gradient, 100, 4, 28) > 1,
+            "Dark low-contrast gradient dithering breaks repeated color bands");
+
+        using var repeated = BackdropRenderer.RenderFiles([sourcePath], settings);
+        Assert(CountPixelDifferences(gradient, repeated) == 0,
+            "Gradient dithering stays deterministic");
+
+        settings.BackgroundMode = BackgroundMode.SolidColor;
+        settings.BackgroundColor1Hex = "#202020";
+        using var solid = BackdropRenderer.RenderFiles([sourcePath], settings);
+        var imageBounds = BackdropRenderer.GetImageBounds([new Size(420, 680)], settings)[0];
+        var foregroundMatches = true;
+        for (var y = (int)Math.Ceiling(imageBounds.Top + 4); y < imageBounds.Bottom - 4 && foregroundMatches; y += 17)
+        for (var x = (int)Math.Ceiling(imageBounds.Left + 4); x < imageBounds.Right - 4; x += 17)
+        {
+            if (gradient.GetPixel(x, y).ToArgb() == solid.GetPixel(x, y).ToArgb())
+                continue;
+            foregroundMatches = false;
+            break;
+        }
+        Assert(foregroundMatches, "Gradient dithering leaves source image pixels unchanged");
+        Assert(sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(sourcePath))),
+            "Gradient dithering does not modify the source file");
     }
 
     private static bool IsNearColor(Color actual, Color expected, int tolerance) =>
@@ -519,6 +666,14 @@ internal static class SelfCheckRunner
                 differences++;
         }
         return differences;
+    }
+
+    private static int CountDistinctColorsInColumn(Bitmap image, int x, int top, int bottom)
+    {
+        var colors = new HashSet<int>();
+        for (var y = top; y < bottom; y++)
+            colors.Add(image.GetPixel(x, y).ToArgb());
+        return colors.Count;
     }
 
     private static void CaptureDialog(Form form, string path)
@@ -583,7 +738,7 @@ internal static class SelfCheckRunner
     {
         var settingLabels = Descendants(form).OfType<Label>().Where(label =>
             label.Parent is TableLayoutPanel field && field.RowCount == 2 && field.ColumnCount == 1 &&
-            label.AccessibleName is "Canvas ratio" or "Layout" or "Size" or "Padding" or "Shadow").ToArray();
+            label.AccessibleName is "Canvas ratio" or "Layout" or "Size (px)" or "Padding (%)" or "Shadow (%)").ToArray();
         Assert(settingLabels.Length == 5, $"All setting labels are present at {sizeName} size");
         foreach (var label in settingLabels)
         {
@@ -593,6 +748,9 @@ internal static class SelfCheckRunner
             var required = label.PreferredHeight + label.Margin.Vertical;
             Assert(rows[0] >= required,
                 $"{label.Text} label row fits its preferred height at {sizeName} size ({rows[0]} >= {required})");
+            var availableLabelWidth = label.ClientSize.Width - label.Padding.Horizontal;
+            Assert(TextRenderer.MeasureText(label.Text, label.Font).Width <= availableLabelWidth,
+                $"{label.Text} label fits without truncation at {sizeName} size ({availableLabelWidth}px available)");
             var input = field.GetControlFromPosition(0, 1)!;
             Assert(rows[1] >= input.MinimumSize.Height,
                 $"{label.Text} input row fits its minimum height at {sizeName} size");
@@ -632,33 +790,75 @@ internal static class SelfCheckRunner
         var mode = GetField<Control>(form, "_backgroundModeLabel");
         var badge = GetField<Label>(form, "_previewImageCount");
         var actions = button.Parent!;
-        var heading = actions.Parent!;
+        var previewLayout = (TableLayoutPanel)actions.Parent!;
+        var heading = previewLayout.GetControlFromPosition(0, 0)!;
         heading.PerformLayout();
+        previewLayout.PerformLayout();
         actions.PerformLayout();
         badge.PerformLayout();
         var requiredBadgeWidth = TextRenderer.MeasureText("9 IMAGES", badge.Font).Width;
-        Assert(actions.Right <= heading.ClientSize.Width && VisibleChildrenFit(actions),
-            $"Background button and mode fit inside the preview heading at {sizeName} size (heading {heading.ClientSize}, actions {actions.Bounds}, children {DescribeControls(actions)})");
+        Assert(actions.Right <= previewLayout.ClientSize.Width && VisibleChildrenFit(actions),
+            $"Background button and mode fit in their own preview toolbar row at {sizeName} size (toolbar {actions.ClientSize}, children {DescribeControls(actions)})");
         Assert(!badge.AutoSize && badge.Width >= requiredBadgeWidth && badge.Right <= heading.ClientSize.Width,
             $"Sample or image-count badge fits inside the preview heading at {sizeName} size ({badge.Width} >= {requiredBadgeWidth})");
         Assert(TextRenderer.MeasureText("Background", button.Font).Width <= button.ClientSize.Width,
             $"Background editor button label fits at {sizeName} size");
-        Assert(mode.Text.Length > 0 && mode.Right <= actions.ClientSize.Width,
-            $"Current background mode label fits at {sizeName} size");
+        var longestMode = new[] { "Automatic gradient", "Solid color", "Two-color gradient", "Soft-grain pattern", "Dots pattern" }
+            .Max(text => TextRenderer.MeasureText(text, mode.Font).Width);
+        Assert(mode.Text.Length > 0 && mode.ClientSize.Width >= longestMode && mode.Right <= actions.ClientSize.Width,
+            $"Full current background mode fits at {sizeName} size ({mode.ClientSize.Width} >= {longestMode})");
+    }
+
+    private static void AssertImageHintState(MainForm form, bool expectedVisible, string state)
+    {
+        var hint = GetField<Label>(form, "_imageHint");
+        var imageList = GetField<ListBox>(form, "_imageList");
+        var host = hint.Parent!;
+        host.PerformLayout();
+        var visibleContent = expectedVisible ? (Control)hint : imageList;
+        Assert(hint.Visible == expectedVisible && hint.Text == "Add or drop up to 9 images." &&
+            imageList.Visible == !expectedVisible && host.ClientSize.Height >= 44 &&
+            host.ClientSize.Width > 0 && visibleContent.Bounds == host.ClientRectangle,
+            $"Centered empty-list hint visibility and image-list bounds are correct for {state} state (host {host.ClientSize}, visible {visibleContent.Bounds}, children {DescribeControls(host)})");
+    }
+
+    private static void AssertImageHeaderSizing(MainForm form, string sizeName)
+    {
+        var add = Descendants(form).OfType<Button>().Single(button => button.AccessibleName == "Add up to nine images");
+        var clear = GetField<Button>(form, "_clearImagesButton");
+        var count = GetField<Label>(form, "_selectedCount");
+        var toolbar = (TableLayoutPanel)add.Parent!;
+        toolbar.PerformLayout();
+        Assert(VisibleChildrenFit(toolbar) &&
+            TextRenderer.MeasureText(add.Text, add.Font).Width <= add.ClientSize.Width - 16 &&
+            TextRenderer.MeasureText(clear.Text, clear.Font).Width <= clear.ClientSize.Width - 16 &&
+            TextRenderer.MeasureText(count.Text, count.Font).Width <= count.ClientSize.Width,
+            $"Image count and Add/Clear controls fit their toolbar at {sizeName} size ({DescribeControls(toolbar)})");
     }
 
     private static string DescribeControls(Control parent) => string.Join(", ", parent.Controls.Cast<Control>()
         .Select(control => $"{control.GetType().Name}:{control.Visible}:{control.Bounds} within {parent.ClientSize}"));
 
-    private static void AssertDarkControlChrome(MainForm form)
+    private static void AssertDarkControlChrome(MainForm form, string runFolder)
     {
         var failures = new List<string>();
+        var spinner = GetField<SmallBusySpinner>(form, "_previewSpinner");
+        spinner.StartSpinning();
+        Application.DoEvents();
+        Assert(spinner.Visible && spinner.AccessibleRole == AccessibleRole.ProgressBar,
+            "Preview pending spinner is visible and exposes its progress role");
+        CaptureNativeForm(form, Path.Combine(runFolder, "preview-updating-live-compact.png"));
+        spinner.StopSpinning();
+        Assert(!spinner.Visible, "Preview pending spinner hides when work finishes");
         var moveUp = GetField<Button>(form, "_moveUp");
         var moveDown = GetField<Button>(form, "_moveDown");
-        Assert(moveUp.Text == "Up" && moveDown.Text == "Down" &&
+        Assert(moveUp.Text.Length == 1 && moveDown.Text.Length == 1 &&
             TextRenderer.MeasureText(moveUp.Text, moveUp.Font).Width <= moveUp.ClientSize.Width &&
             TextRenderer.MeasureText(moveDown.Text, moveDown.Font).Width <= moveDown.ClientSize.Width &&
-            moveUp.AccessibleName == "Move selected image up" && moveDown.AccessibleName == "Move selected image down",
+            moveUp.AccessibleName == "Move selected image to previous position" && moveDown.AccessibleName == "Move selected image to next position" &&
+            GetField<Button>(form, "_removeSelectedButton").Text == "Remove" &&
+            TextRenderer.MeasureText("Remove", GetField<Button>(form, "_removeSelectedButton").Font).Width <=
+                GetField<Button>(form, "_removeSelectedButton").ClientSize.Width - 16,
             "Compact reorder buttons fit while keeping their full accessible names");
 
         var generate = GetField<Control>(form, "_generateButton");
@@ -679,8 +879,20 @@ internal static class SelfCheckRunner
         var edge = GetField<Control>(form, "_outputWidth");
         using (var bitmap = CaptureControl(edge))
         {
-            var arrowArea = bitmap.GetPixel(bitmap.Width - 8, bitmap.Height / 4);
-            CheckDarkPixel(failures, "Long edge spinner area stays charcoal", arrowArea);
+            var buttonLeft = bitmap.Width - Math.Min(SystemInformation.VerticalScrollBarWidth, bitmap.Width / 3);
+            var glyphPixels = 0;
+            var backgroundPixels = 0;
+            for (var y = 0; y < bitmap.Height; y++)
+            for (var x = buttonLeft; x < bitmap.Width; x++)
+            {
+                var color = bitmap.GetPixel(x, y);
+                if (Math.Max(color.R, Math.Max(color.G, color.B)) > 180)
+                    glyphPixels++;
+                if (Math.Max(color.R, Math.Max(color.G, color.B)) < 100)
+                    backgroundPixels++;
+            }
+            Assert(glyphPixels > 4 && backgroundPixels > 20,
+                $"Long edge spinner has visible chevrons over a charcoal field (glyph {glyphPixels}, background {backgroundPixels})");
         }
 
         var layout = GetField<Control>(form, "_layout");
@@ -731,9 +943,9 @@ internal static class SelfCheckRunner
         padding.Value = originalValue + 1;
         padding.Value = originalValue;
         padding.UpButton();
-        Assert(padding.Value == originalValue + padding.Increment, "Native plus control increments within the configured bounds");
+        Assert(padding.Value == originalValue + padding.Increment, "Up chevron increments within the configured bounds");
         padding.DownButton();
-        Assert(padding.Value == originalValue && valueChanges == 4, "Native minus control restores the value and raises ValueChanged");
+        Assert(padding.Value == originalValue && valueChanges == 4, "Down chevron restores the value and raises ValueChanged");
 
         if (failures.Count != 0)
             throw new InvalidOperationException("Self-check failed: " + string.Join("; ", failures));

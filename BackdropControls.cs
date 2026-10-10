@@ -50,6 +50,56 @@ internal static class BackdropControlPaint
     }
 }
 
+internal sealed class SmallBusySpinner : Control
+{
+    private readonly System.Windows.Forms.Timer _timer = new() { Interval = 75 };
+    private int _angle;
+
+    public SmallBusySpinner()
+    {
+        Size = new Size(16, 16);
+        AccessibleName = "Preview updating";
+        AccessibleDescription = "The composition preview is being updated.";
+        AccessibleRole = AccessibleRole.ProgressBar;
+        TabStop = false;
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        _timer.Tick += (_, _) =>
+        {
+            _angle = (_angle + 30) % 360;
+            Invalidate();
+        };
+    }
+
+    public void StartSpinning()
+    {
+        Visible = true;
+        if (!_timer.Enabled)
+            _timer.Start();
+    }
+
+    public void StopSpinning()
+    {
+        _timer.Stop();
+        Visible = false;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using var pen = new Pen(BackdropPalette.Muted, 2) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        e.Graphics.DrawArc(pen, RectangleF.Inflate(ClientRectangle, -3, -3), _angle, 245);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            _timer.Dispose();
+        base.Dispose(disposing);
+    }
+}
+
 internal sealed class BackdropButton : Button
 {
     private readonly bool _primary;
@@ -188,8 +238,29 @@ internal sealed class BackdropButton : Button
 internal sealed class DarkComboBox : ComboBox
 {
     private const int WmPaint = 0x000F;
+    private const int WmEraseBackground = 0x0014;
     private const int WmPrint = 0x0317;
     private const int WmPrintClient = 0x0318;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PaintState
+    {
+        public IntPtr Hdc;
+        [MarshalAs(UnmanagedType.Bool)] public bool Erase;
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+        [MarshalAs(UnmanagedType.Bool)] public bool Restore;
+        [MarshalAs(UnmanagedType.Bool)] public bool IncrementalUpdate;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public byte[] Reserved;
+    }
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern IntPtr BeginPaint(IntPtr window, out PaintState paint);
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern bool EndPaint(IntPtr window, ref PaintState paint);
 
     public DarkComboBox()
     {
@@ -204,16 +275,36 @@ internal sealed class DarkComboBox : ComboBox
     protected override void WndProc(ref Message m)
     {
         var message = m.Msg;
+        if (message == WmEraseBackground)
+        {
+            m.Result = new IntPtr(1);
+            return;
+        }
+
+        if (message == WmPaint && IsHandleCreated)
+        {
+            var hdc = BeginPaint(Handle, out var paint);
+            try
+            {
+                if (hdc != IntPtr.Zero)
+                {
+                    using var graphics = Graphics.FromHdc(hdc);
+                    PaintClosedField(graphics);
+                }
+            }
+            finally
+            {
+                _ = EndPaint(Handle, ref paint);
+            }
+            m.Result = IntPtr.Zero;
+            return;
+        }
+
         base.WndProc(ref m);
-        if (message is not (WmPaint or WmPrint or WmPrintClient) || !IsHandleCreated)
+        if (message is not (WmPrint or WmPrintClient) || !IsHandleCreated)
             return;
 
-        if (message == WmPaint)
-        {
-            using var graphics = Graphics.FromHwnd(Handle);
-            PaintClosedField(graphics);
-        }
-        else if (m.WParam != IntPtr.Zero)
+        if (m.WParam != IntPtr.Zero)
         {
             using var graphics = Graphics.FromHdc(m.WParam);
             PaintClosedField(graphics);
@@ -372,10 +463,8 @@ internal sealed class DarkNumericUpDown : NumericUpDown
         var glyphColor = Enabled ? BackdropPalette.Text : BackdropPalette.Muted;
         var top = new Rectangle(left, 0, buttonWidth, ClientSize.Height / 2 + 1);
         var bottom = new Rectangle(left, ClientSize.Height / 2, buttonWidth, ClientSize.Height - ClientSize.Height / 2);
-        TextRenderer.DrawText(graphics, "+", Font, top, glyphColor,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
-        TextRenderer.DrawText(graphics, "−", Font, bottom, glyphColor,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+        BackdropControlPaint.DrawChevron(graphics, top, up: true, glyphColor);
+        BackdropControlPaint.DrawChevron(graphics, bottom, up: false, glyphColor);
 
         using var border = new Pen(ContainsFocus && ShowFocusCues ? BackdropPalette.Focus : BackdropPalette.Border);
         graphics.DrawRectangle(border, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
@@ -565,17 +654,12 @@ internal sealed class DarkNumericUpDown : NumericUpDown
             using var fill = new SolidBrush(surface);
             graphics.FillRectangle(fill, bounds);
             var midpoint = bounds.Height / 2;
-            using var separator = new Pen(BackdropPalette.Border);
-            graphics.DrawLine(separator, 2, midpoint, bounds.Width - 3, midpoint);
             using var outline = new Pen(_owner.ContainsFocus ? BackdropPalette.Focus : BackdropPalette.Border);
             graphics.DrawRectangle(outline, 0, 0, bounds.Width - 1, bounds.Height - 1);
 
             var glyph = _owner.Enabled ? BackdropPalette.Text : BackdropPalette.Muted;
-            var font = _owner.Font;
-            TextRenderer.DrawText(graphics, "+", font, new Rectangle(0, 0, bounds.Width, midpoint), glyph,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
-            TextRenderer.DrawText(graphics, "−", font, new Rectangle(0, midpoint, bounds.Width, bounds.Height - midpoint), glyph,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+            BackdropControlPaint.DrawChevron(graphics, new Rectangle(0, 0, bounds.Width, midpoint), up: true, glyph);
+            BackdropControlPaint.DrawChevron(graphics, new Rectangle(0, midpoint, bounds.Width, bounds.Height - midpoint), up: false, glyph);
         }
 
         private void Redraw()

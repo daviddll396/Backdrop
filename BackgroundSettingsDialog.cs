@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 
 namespace Backdrop;
@@ -86,7 +87,18 @@ internal sealed class BackgroundSettingsDialog : Form
             Anchor = AnchorStyles.Right,
             Margin = Padding.Empty
         };
-        var apply = new BackdropButton("Apply", primary: true) { Width = 96, DialogResult = DialogResult.OK };
+        var apply = new BackdropButton("Apply", primary: true) { Width = 96 };
+        apply.Click += (_, _) =>
+        {
+            var invalidColor = new[] { _color1, _color2 }.FirstOrDefault(row => row.Visible && !row.HasValidHex);
+            if (invalidColor is not null)
+            {
+                invalidColor.FocusEditor();
+                return;
+            }
+            DialogResult = DialogResult.OK;
+            Close();
+        };
         var cancel = new BackdropButton("Cancel") { Width = 96, DialogResult = DialogResult.Cancel };
         buttons.Controls.Add(apply);
         buttons.Controls.Add(cancel);
@@ -191,28 +203,35 @@ internal sealed class BackgroundSettingsDialog : Form
 
     private sealed class ColorSelectionRow : TableLayoutPanel
     {
-        private readonly Label _hexLabel;
+        private static readonly string[] QuickColors =
+        [
+            "#334155", "#1E3A5F", "#267A69", "#A7564A",
+            "#D5B98A", "#EEE3D2", "#DCE8E6", "#E6D8EA"
+        ];
+        private readonly TextBox _hexEditor;
         private readonly Panel _swatch;
+        private readonly string _labelText;
         private Color _color;
 
         public event EventHandler? ColorChanged;
         public string ColorHex => $"#{_color.R:X2}{_color.G:X2}{_color.B:X2}";
+        public bool HasValidHex { get; private set; } = true;
 
         public ColorSelectionRow(string labelText, string colorHex)
         {
-            ColumnCount = 4;
-            RowCount = 1;
+            _labelText = labelText;
+            ColumnCount = 2;
+            RowCount = 2;
             Width = 460;
-            Height = 40;
-            MinimumSize = new Size(460, 40);
+            Height = 68;
+            MinimumSize = new Size(460, 68);
             Dock = DockStyle.Fill;
             BackColor = BackdropPalette.Surface;
             Margin = new Padding(0, 0, 0, 6);
             ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
             ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 34));
-            ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
-            RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+            RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
 
             var label = new Label
             {
@@ -223,34 +242,89 @@ internal sealed class BackgroundSettingsDialog : Form
                 Anchor = AnchorStyles.Left,
                 Margin = new Padding(0)
             };
-            _hexLabel = new Label
+            var controls = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(8, 0, 0, 0),
+                ColumnCount = 3,
+                RowCount = 1,
+                BackColor = BackdropPalette.Surface,
+                Margin = Padding.Empty
+            };
+            controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            controls.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 34));
+            controls.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
+            controls.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            _hexEditor = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                CharacterCasing = CharacterCasing.Upper,
+                MaxLength = 7,
                 BackColor = BackdropPalette.Field,
                 ForeColor = BackdropPalette.Text,
                 BorderStyle = BorderStyle.FixedSingle,
-                AccessibleName = $"{labelText} hex color"
+                AccessibleName = $"{labelText} hex color",
+                AccessibleDescription = "Enter an opaque color in the format #RRGGBB."
             };
             _swatch = new Panel
             {
                 Dock = DockStyle.Fill,
-                Margin = new Padding(5, 4, 0, 4),
+                Margin = new Padding(6, 6, 0, 6),
                 BorderStyle = BorderStyle.FixedSingle,
                 AccessibleName = $"{labelText} swatch"
             };
-            var choose = new BackdropButton("Choose…")
+            var choose = new BackdropButton("Advanced")
             {
                 Dock = DockStyle.Fill,
-                Margin = new Padding(6, 3, 0, 3),
-                AccessibleName = $"Choose {labelText.ToLowerInvariant()}"
+                Margin = new Padding(8, 2, 0, 2),
+                AccessibleName = $"Open advanced picker for {labelText.ToLowerInvariant()}"
             };
             choose.Click += (_, _) => ChooseColor();
+            controls.Controls.Add(_hexEditor, 0, 0);
+            controls.Controls.Add(_swatch, 1, 0);
+            controls.Controls.Add(choose, 2, 0);
+
+            var paletteLabel = new Label
+            {
+                Text = "Quick colors",
+                AutoSize = true,
+                ForeColor = BackdropPalette.Muted,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Anchor = AnchorStyles.Left,
+                Margin = Padding.Empty
+            };
+            var palette = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                BackColor = BackdropPalette.Surface,
+                Margin = Padding.Empty
+            };
+            foreach (var hex in QuickColors)
+            {
+                var color = ColorTranslator.FromHtml(hex);
+                var swatchButton = new Button
+                {
+                    Width = 23,
+                    Height = 21,
+                    Margin = new Padding(0, 2, 5, 1),
+                    FlatStyle = FlatStyle.Flat,
+                    UseVisualStyleBackColor = false,
+                    BackColor = color,
+                    AccessibleRole = AccessibleRole.PushButton,
+                    AccessibleName = $"Set {labelText.ToLowerInvariant()} to {hex}"
+                };
+                swatchButton.FlatAppearance.BorderSize = 1;
+                swatchButton.FlatAppearance.BorderColor = BackdropPalette.Border;
+                swatchButton.Click += (_, _) => SetColor(color);
+                palette.Controls.Add(swatchButton);
+            }
+
             Controls.Add(label, 0, 0);
-            Controls.Add(_hexLabel, 1, 0);
-            Controls.Add(_swatch, 2, 0);
-            Controls.Add(choose, 3, 0);
+            Controls.Add(controls, 1, 0);
+            Controls.Add(paletteLabel, 0, 1);
+            Controls.Add(palette, 1, 1);
+            _hexEditor.TextChanged += HexEditor_TextChanged;
             SetColor(colorHex);
         }
 
@@ -265,15 +339,60 @@ internal sealed class BackgroundSettingsDialog : Form
             };
             if (dialog.ShowDialog(FindForm()) != DialogResult.OK)
                 return;
-            SetColor($"#{dialog.Color.R:X2}{dialog.Color.G:X2}{dialog.Color.B:X2}");
-            ColorChanged?.Invoke(this, EventArgs.Empty);
+            SetColor(dialog.Color);
         }
 
         private void SetColor(string hex)
         {
-            _color = ColorTranslator.FromHtml(hex);
-            _hexLabel.Text = ColorHex;
+            if (!TryParseHex(hex, out var color))
+                throw new ArgumentException("Enter a color in the format #RRGGBB.", nameof(hex));
+            SetColor(color);
+        }
+
+        public void FocusEditor() => _hexEditor.Focus();
+
+        private void SetColor(Color color)
+        {
+            var changed = _color.ToArgb() != Color.FromArgb(color.R, color.G, color.B).ToArgb();
+            _color = Color.FromArgb(color.R, color.G, color.B);
+            HasValidHex = true;
+            _hexEditor.BackColor = BackdropPalette.Field;
+            if (_hexEditor.Text != ColorHex)
+                _hexEditor.Text = ColorHex;
             _swatch.BackColor = _color;
+            if (changed)
+                ColorChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void HexEditor_TextChanged(object? sender, EventArgs e)
+        {
+            if (!TryParseHex(_hexEditor.Text, out var color))
+            {
+                HasValidHex = false;
+                _hexEditor.BackColor = Color.FromArgb(74, 42, 47);
+                return;
+            }
+
+            var changed = !HasValidHex || _color.ToArgb() != color.ToArgb();
+            HasValidHex = true;
+            _hexEditor.BackColor = BackdropPalette.Field;
+            if (!changed)
+                return;
+            _color = color;
+            _swatch.BackColor = _color;
+            if (_hexEditor.Text != ColorHex)
+                _hexEditor.Text = ColorHex;
+            ColorChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private static bool TryParseHex(string value, out Color color)
+        {
+            color = default;
+            if (value.Length != 7 || value[0] != '#' ||
+                !uint.TryParse(value.AsSpan(1), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var argb))
+                return false;
+            color = Color.FromArgb((int)(argb >> 16) & 255, (int)(argb >> 8) & 255, (int)argb & 255);
+            return true;
         }
     }
 }

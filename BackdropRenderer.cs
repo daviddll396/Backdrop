@@ -8,6 +8,7 @@ internal static class BackdropRenderer
 {
     public const int MaximumImages = 9;
     public const int MaximumPreviewLongEdge = 1000;
+    private const int MaximumPreviewShadowMaskLongEdge = 256;
     private const long MaximumImagePixels = 40_000_000;
     private const long MaximumSelectionPixels = 80_000_000;
     private const double MinimumAutoCompositionRatio = 0.5;
@@ -21,6 +22,116 @@ internal static class BackdropRenderer
 
     private sealed record ImageInfo(string Path, int Orientation);
     private sealed record LoadedImage(string Path, Bitmap Bitmap);
+    internal sealed class PreviewImageCache : IDisposable
+    {
+        private sealed record CachedImage(long Length, DateTime LastWriteUtc, long PixelCount, Bitmap Bitmap);
+
+        private readonly Dictionary<string, CachedImage> _images = new(StringComparer.OrdinalIgnoreCase);
+        private bool _disposed;
+
+        internal int Count => _images.Count;
+
+        internal IReadOnlyList<Bitmap> Load(IReadOnlyList<string> paths, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var selected = paths.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in _images.Keys.Where(path => !selected.Contains(path)).ToArray())
+            {
+                _images[path].Bitmap.Dispose();
+                _images.Remove(path);
+            }
+
+            var result = new Bitmap[paths.Count];
+            long totalPixels = 0;
+            for (var i = 0; i < paths.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var path = Path.GetFullPath(paths[i]);
+                if (!File.Exists(path))
+                    throw new FileNotFoundException($"The selected image was not found: {paths[i]}", path);
+                if (!SupportedExtensions.Contains(Path.GetExtension(path)))
+                    throw new InvalidDataException($"'{Path.GetFileName(path)}' is not a supported image. Choose PNG, JPEG, BMP, GIF, or TIFF files.");
+
+                var file = new FileInfo(path);
+                var length = file.Length;
+                var lastWriteUtc = file.LastWriteTimeUtc;
+                if (!_images.TryGetValue(path, out var image) || image.Length != length || image.LastWriteUtc != lastWriteUtc)
+                {
+                    image?.Bitmap.Dispose();
+                    _images.Remove(path);
+                    image = LoadPreviewImage(path, length, lastWriteUtc, cancellationToken);
+                    _images.Add(path, image);
+                }
+
+                totalPixels += image.PixelCount;
+                if (totalPixels > MaximumSelectionPixels)
+                    throw new InvalidDataException("The selected images exceed the 80-megapixel total limit.");
+                result[i] = image.Bitmap;
+            }
+            return result;
+        }
+
+        private static CachedImage LoadPreviewImage(string path, long length, DateTime lastWriteUtc, CancellationToken cancellationToken)
+        {
+            Bitmap? thumbnail = null;
+            long pixelCount;
+            try
+            {
+                using (var source = Image.FromFile(path))
+                {
+                    pixelCount = (long)source.Width * source.Height;
+                    if (pixelCount > MaximumImagePixels)
+                        throw new InvalidDataException($"'{Path.GetFileName(path)}' is larger than the 40-megapixel limit.");
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var previewSize = PreviewSize(source.Size);
+                    thumbnail = new Bitmap(previewSize.Width, previewSize.Height, PixelFormat.Format32bppPArgb);
+                    using (var graphics = Graphics.FromImage(thumbnail))
+                    {
+                        graphics.CompositingMode = CompositingMode.SourceCopy;
+                        graphics.CompositingQuality = CompositingQuality.HighSpeed;
+                        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        graphics.DrawImage(source, new Rectangle(Point.Empty, previewSize));
+                    }
+                    ApplyOrientation(thumbnail, ReadOrientation(source));
+                }
+
+                var file = new FileInfo(path);
+                file.Refresh();
+                if (!file.Exists || file.Length != length || file.LastWriteTimeUtc != lastWriteUtc)
+                    throw new IOException($"'{Path.GetFileName(path)}' changed while the preview was loading.");
+
+                return new CachedImage(length, lastWriteUtc, pixelCount, thumbnail);
+            }
+            catch (InvalidDataException)
+            {
+                thumbnail?.Dispose();
+                throw;
+            }
+            catch (Exception ex) when (ex is ArgumentException or OutOfMemoryException or ExternalException or IOException or UnauthorizedAccessException)
+            {
+                thumbnail?.Dispose();
+                throw new InvalidDataException($"'{Path.GetFileName(path)}' could not be decoded as an image. Check the file and try again.", ex);
+            }
+        }
+
+        public void Clear()
+        {
+            foreach (var image in _images.Values)
+                image.Bitmap.Dispose();
+            _images.Clear();
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            Clear();
+        }
+    }
+
     private sealed class ColorBucket
     {
         public long Count;
@@ -45,11 +156,12 @@ internal static class BackdropRenderer
         }
     }
 
-    public static Bitmap RenderPreviewFiles(IReadOnlyList<string> paths, AppSettings settings, CancellationToken cancellationToken = default)
+    public static Bitmap RenderPreviewFiles(IReadOnlyList<string> paths, AppSettings settings, PreviewImageCache cache, CancellationToken cancellationToken = default)
     {
+        ValidateRequest(paths, settings);
         var previewSettings = settings.Copy();
         previewSettings.OutputWidth = Math.Min(previewSettings.OutputWidth, MaximumPreviewLongEdge);
-        return RenderFiles(paths, previewSettings, cancellationToken);
+        return RenderBitmaps(cache.Load(paths, cancellationToken), previewSettings, cancellationToken, MaximumPreviewShadowMaskLongEdge);
     }
 
     public static string Generate(IReadOnlyList<string> paths, AppSettings settings, CancellationToken cancellationToken = default)
@@ -117,7 +229,7 @@ internal static class BackdropRenderer
         using var first = CreateSampleAppScreen(400, 800, 0);
         using var second = CreateSampleAppScreen(400, 800, 1);
         using var third = CreateSampleAppScreen(400, 800, 2);
-        return RenderBitmaps([first, second, third], settings);
+        return RenderBitmaps([first, second, third], settings, shadowMaskLongEdge: MaximumPreviewShadowMaskLongEdge);
     }
 
     public static Bitmap CreateSamplePreview(AppSettings settings, int maximumLongEdge)
@@ -333,6 +445,12 @@ internal static class BackdropRenderer
         }
     }
 
+    private static Size PreviewSize(Size source)
+    {
+        var scale = Math.Min(1d, MaximumPreviewLongEdge / (double)Math.Max(source.Width, source.Height));
+        return new Size(Math.Max(1, (int)Math.Round(source.Width * scale)), Math.Max(1, (int)Math.Round(source.Height * scale)));
+    }
+
     private static int ReadOrientation(Image image)
     {
         const int OrientationId = 0x0112;
@@ -368,7 +486,8 @@ internal static class BackdropRenderer
             bitmap.RotateFlip(transform);
     }
 
-    private static Bitmap RenderBitmaps(IReadOnlyList<Bitmap> images, AppSettings settings, CancellationToken cancellationToken = default)
+    private static Bitmap RenderBitmaps(IReadOnlyList<Bitmap> images, AppSettings settings, CancellationToken cancellationToken = default,
+        int shadowMaskLongEdge = 384)
     {
         if (!settings.IsValid())
             throw new ArgumentOutOfRangeException(nameof(settings));
@@ -379,18 +498,18 @@ internal static class BackdropRenderer
         var output = new Bitmap(canvas.Width, canvas.Height, PixelFormat.Format32bppArgb);
         try
         {
+            DrawBackground(output, images, settings, cancellationToken);
+
             using var graphics = Graphics.FromImage(output);
             graphics.CompositingQuality = CompositingQuality.HighQuality;
             graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
             graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-            DrawBackground(graphics, output.Size, images, settings, cancellationToken);
-
             for (var i = 0; i < images.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                DrawShadow(graphics, bounds[i], settings.ShadowStrength, output.Width);
+                DrawShadow(graphics, bounds[i], settings.ShadowStrength, output.Width, shadowMaskLongEdge);
                 graphics.DrawImage(images[i], bounds[i]);
             }
             return output;
@@ -402,7 +521,7 @@ internal static class BackdropRenderer
         }
     }
 
-    private static void DrawBackground(Graphics graphics, Size size, IReadOnlyList<Bitmap> images, AppSettings settings, CancellationToken cancellationToken)
+    private static void DrawBackground(Bitmap canvas, IReadOnlyList<Bitmap> images, AppSettings settings, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var first = ColorTranslator.FromHtml(settings.BackgroundColor1Hex);
@@ -410,30 +529,101 @@ internal static class BackdropRenderer
         {
             case BackgroundMode.AutoGradient:
                 var sampled = SampleDominantColors(images);
-                FillGradient(graphics, size, sampled.First, sampled.Second);
+                FillGradient(canvas, sampled.First, sampled.Second, cancellationToken);
                 break;
             case BackgroundMode.SolidColor:
-                graphics.Clear(first);
+                using (var graphics = Graphics.FromImage(canvas))
+                    graphics.Clear(first);
                 break;
             case BackgroundMode.CustomGradient:
-                FillGradient(graphics, size, first, ColorTranslator.FromHtml(settings.BackgroundColor2Hex));
+                FillGradient(canvas, first, ColorTranslator.FromHtml(settings.BackgroundColor2Hex), cancellationToken);
                 break;
             case BackgroundMode.Pattern:
-                graphics.Clear(first);
-                using (var tile = CreatePatternTile(size, first, settings.BackgroundPattern, cancellationToken))
+                using (var graphics = Graphics.FromImage(canvas))
+                using (var tile = CreatePatternTile(canvas.Size, first, settings.BackgroundPattern, cancellationToken))
                 using (var brush = new TextureBrush(tile, WrapMode.Tile))
-                    graphics.FillRectangle(brush, 0, 0, size.Width, size.Height);
+                {
+                    graphics.CompositingQuality = CompositingQuality.HighQuality;
+                    graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    graphics.Clear(first);
+                    graphics.FillRectangle(brush, 0, 0, canvas.Width, canvas.Height);
+                }
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(settings), "The background mode is invalid.");
         }
     }
 
-    private static void FillGradient(Graphics graphics, Size size, Color first, Color second)
+    private static void FillGradient(Bitmap canvas, Color first, Color second, CancellationToken cancellationToken)
     {
-        using var gradient = new LinearGradientBrush(
-            new Rectangle(0, 0, size.Width, size.Height), first, second, LinearGradientMode.Horizontal);
-        graphics.FillRectangle(gradient, 0, 0, size.Width, size.Height);
+        if (first.ToArgb() == second.ToArgb())
+        {
+            using var graphics = Graphics.FromImage(canvas);
+            graphics.Clear(first);
+            return;
+        }
+
+        var data = canvas.LockBits(new Rectangle(0, 0, canvas.Width, canvas.Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var stride = Math.Abs(data.Stride);
+            var row = new byte[stride];
+            var lastX = canvas.Width - 1;
+            var denominator = Math.Max(1, lastX);
+
+            for (var y = 0; y < canvas.Height; y++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                for (var x = 0; x < canvas.Width; x++)
+                {
+                    var pixel = x * 4;
+                    if (x == 0 || x == lastX)
+                    {
+                        var endpoint = x == 0 ? first : second;
+                        row[pixel] = endpoint.B;
+                        row[pixel + 1] = endpoint.G;
+                        row[pixel + 2] = endpoint.R;
+                    }
+                    else
+                    {
+                        var amount = x / (float)denominator;
+                        var noise = GradientNoise(x, y);
+                        row[pixel] = DitheredChannel(first.B, second.B, amount, noise);
+                        row[pixel + 1] = DitheredChannel(first.G, second.G, amount, noise);
+                        row[pixel + 2] = DitheredChannel(first.R, second.R, amount, noise);
+                    }
+                    row[pixel + 3] = 255;
+                }
+
+                Marshal.Copy(row, 0, IntPtr.Add(data.Scan0, y * data.Stride), row.Length);
+            }
+        }
+        finally
+        {
+            canvas.UnlockBits(data);
+        }
+    }
+
+    private static byte DitheredChannel(byte first, byte second, float amount, uint noise)
+    {
+        var value = first + (second - first) * (double)amount;
+        var lower = Math.Floor(value);
+        var fraction = value - lower;
+        var threshold = (noise >> 8) / 16777216d;
+        return (byte)Math.Clamp((int)(lower + (threshold < fraction ? 1 : 0)), 0, 255);
+    }
+
+    private static uint GradientNoise(int x, int y)
+    {
+        unchecked
+        {
+            var value = (uint)x * 0x9E3779B9u ^ (uint)y * 0x85EBCA6Bu ^ 0xC2B2AE35u;
+            value ^= value >> 16;
+            value *= 0x7FEB352Du;
+            value ^= value >> 15;
+            value *= 0x846CA68Bu;
+            return value ^ (value >> 16);
+        }
     }
 
     private static Bitmap CreatePatternTile(Size canvasSize, Color baseColor, BackgroundPattern pattern, CancellationToken cancellationToken)
@@ -538,19 +728,24 @@ internal static class BackdropRenderer
             .Select(pair => (Color: Average(pair.Value), pair.Value.Count))
             .ToArray();
         if (dominant.Length == 0)
-            return (Color.FromArgb(43, 54, 75), Color.FromArgb(75, 82, 104));
+            return (Color.FromArgb(91, 104, 122), Color.FromArgb(145, 153, 166));
 
         var colored = dominant.Where(item => item.Color.GetSaturation() >= 0.2f && item.Color.GetBrightness() >= 0.08f).ToArray();
         var candidates = colored.Length > 0 && colored[0].Count >= dominant.Sum(item => item.Count) * 0.05
             ? colored
             : dominant;
-        var first = candidates[0].Color;
-        var secondBucket = candidates.Skip(1).Select(item => item.Color)
+        var first = LiftAutomaticColor(candidates[0].Color);
+        var secondBucket = candidates.Skip(1).Select(item => LiftAutomaticColor(item.Color))
             .FirstOrDefault(color => ColorDistance(first, color) >= 50);
         if (secondBucket.IsEmpty)
-            return (first, Blend(first, Color.Black, 0.35f));
+            secondBucket = first.GetBrightness() < 0.7f
+                ? Blend(first, Color.White, 0.32f)
+                : Blend(first, Color.Black, 0.25f);
         return (first, secondBucket);
     }
+
+    private static Color LiftAutomaticColor(Color color) =>
+        Blend(color, Color.White, 0.25f + 0.30f * (1f - color.GetBrightness()));
 
     private static Color Average(ColorBucket bucket) => Color.FromArgb(
         (int)(bucket.Red / bucket.Count),
@@ -565,7 +760,7 @@ internal static class BackdropRenderer
         return Math.Sqrt(red * red + green * green + blue * blue);
     }
 
-    private static void DrawShadow(Graphics graphics, RectangleF bounds, double strength, int canvasWidth)
+    private static void DrawShadow(Graphics graphics, RectangleF bounds, double strength, int canvasWidth, int shadowMaskLongEdge)
     {
         if (strength <= 0)
             return;
@@ -573,7 +768,7 @@ internal static class BackdropRenderer
         var blur = Math.Clamp(canvasWidth * 0.012f, 8, 32);
         var offset = blur * 0.2f;
         var padding = (int)Math.Ceiling(blur + offset);
-        var scale = Math.Min(1f, 384f / Math.Max(bounds.Width, bounds.Height));
+        var scale = Math.Min(1f, shadowMaskLongEdge / Math.Max(bounds.Width, bounds.Height));
         var width = Math.Max(1, (int)Math.Ceiling((bounds.Width + padding * 2) * scale));
         var height = Math.Max(1, (int)Math.Ceiling((bounds.Height + padding * 2) * scale));
         using var mask = new Bitmap(width, height, PixelFormat.Format32bppArgb);

@@ -1,6 +1,6 @@
 # Backdrop
 
-Backdrop combines up to nine pictures into one PNG. The window shows a live preview. Add files with **Add images** or drop them into the window. Use **Up** and **Down**, or press **Alt+Up** and **Alt+Down**, to set their order. Pictures keep their original shape and are never cropped.
+Backdrop combines up to nine pictures into one PNG. The window shows a live preview. Add files with **Add images** or drop them into the window. Select an image and use the previous or next button to set its order. You can also press **Alt+Up** and **Alt+Down**. Pictures keep their original shape and are never cropped.
 
 Image processing runs on your device. Backdrop does not upload pictures or require an account.
 
@@ -12,11 +12,11 @@ Image processing runs on your device. Backdrop does not upload pictures or requi
 - **Long edge:** The output's longest side, from 640 to 4096 pixels. The 16:9 default at 1920 pixels makes a 1920 × 1080 PNG.
 - **Padding:** A percentage applied to each canvas edge.
 - **Shadow:** A soft Gaussian shadow under each picture.
-- **Background:** Choose **Automatic gradient**, **Solid color**, **Two-color gradient**, or **Pattern**. Automatic gradient samples the selected pictures and is the default for older preference files. Pattern uses one base color with soft grain or spaced dots.
+- **Background:** Choose **Automatic gradient**, **Solid color**, **Two-color gradient**, or **Pattern**. Automatic gradient samples the selected pictures. It keeps gray colors for monochrome pictures and makes dark colors lighter. This mode is the default for older preference files. Pattern uses one base color with soft grain or spaced dots.
 
-Preview renders use a 1000-pixel long edge. The final PNG uses the selected long edge. The preview updates after a short pause when settings, pictures, or order change. **Save preferences** stores settings in `%LOCALAPPDATA%\Backdrop\settings.json`; changes are not saved automatically.
+The live preview uses a 1000-pixel long edge. Backdrop checks the full source size and orientation before it reduces a picture. It reuses the reduced picture while the source stays unchanged. The final PNG uses the selected long edge. A small spinner shows while the preview updates after a short pause. **Save preferences** stores settings in `%LOCALAPPDATA%\Backdrop\settings.json`; changes are not saved automatically.
 
-Choose **Background** above the preview to edit the background. Color fields use opaque six-digit hex colors. Background changes update the preview. **Apply** keeps them in the current session; choose **Save preferences** in the main window to keep them for later.
+Choose **Background** above the preview to edit the background. Use a quick color swatch, enter an opaque `#RRGGBB` value, or open the advanced color picker. Invalid visible color text keeps the editor open until you correct it. Background changes update the preview. **Apply** keeps them in the current session; choose **Save preferences** in the main window to keep them for later.
 
 Backdrop preserves the source files and never replaces an output. A single picture is named `<image>-backdrop.png`. A group is named `backdrop-composition.png`. If that name exists, Backdrop adds a number.
 
